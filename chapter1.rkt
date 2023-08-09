@@ -1,6 +1,5 @@
 #lang racket
 (require racket/fixnum)
-(print-struct #t)
 (struct Program (info body))
 (struct Prim (op args))
 (struct Int (value))
