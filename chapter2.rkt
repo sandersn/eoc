@@ -5,7 +5,13 @@
 (struct Int (value))
 (struct Var (var))
 (struct Let (var exp body))
-(define interp-Lint-class%
+;; Cvar
+(struct Assign (var exp))
+(struct Seq (statements))
+(struct Return (exp))
+(struct CProgram (info blocks))
+
+(define Lint%
   (class object%
     (super-new)
     (define/public ((interp-exp env) e)
@@ -30,8 +36,8 @@
         [n #:when (number? n) (Int n)]))
     (define/public (parse-program sexp)
       (Program '() (parse-exp sexp)))))
-(define interp-Lvar-class%
-  (class interp-Lint-class%
+(define Lvar%
+  (class Lint%
     (super-new)
     (define/override ((interp-exp env) e)
       (match e
@@ -43,16 +49,36 @@
         [(list 'let (list x e) body) (Let x (parse-exp e) (parse-exp body))]
         [x #:when (symbol? x) (Var x)]
         [else (super parse-exp sexp)]))))
-(define lvar (new interp-Lvar-class%))
-((send lvar interp-program '()) (Program '() (Let 'y (Prim '+ (list (Int 1) (Int 2))) (Var 'y))))
+(define Cvar%
+  (class Lvar%
+    (super-new)
+    (define/override ((interp-exp env) e)
+      (match e
+        [(Assign var exp) (dict-set! env var ((interp-exp env) exp))]
+        [(Seq statements) (for/last ([s statements]) ((interp-exp env) s))]
+        [(Return exp) ((interp-exp env) exp)]
+        [else ((super interp-exp env) e)]))
+    (define/override (interp-program p)
+      (match p
+        [(CProgram locals blocks) ((interp-exp locals) (dict-ref blocks 'start))]))))
+(let ((h (make-hash)))
+  (dict-set! h 'x 'running-c-here)
+  (dict-set! h 'y 0)
+  (dict-set! h 'z 0)
+  (send (new Cvar%) interp-program
+        (CProgram
+         h
+         (list (cons 'start (Seq (list (Assign 'x (Int 1)) (Var 'x) (Return (Var 'x)))))))))
+
 (define (run-Lvar sexp)
-  (define lvar (new interp-Lvar-class%))
+  (define lvar (new Lvar%))
   ((send lvar interp-program '()) (send lvar parse-program sexp)))
 (define (assert msg bool)
   (unless bool (error msg)))
 (define (test name actual expected)
   (unless (= actual expected)
     (error (format "Test ~a failed: expected ~a, got ~a" name expected actual))))
-(run-Lvar '(let (y (+ 1 2)) y))
-(run-Lvar '(let (x 1) (let (y 2) (+ x y))))
-(test "test lvar basic" (run-Lvar '(let (x 1) (let (y 2) (+ x y)))) 4)
+; (run-Lvar '(let (y (+ 1 2)) y))
+; (run-Lvar '(let (x 1) (let (y 2) (+ x y))))
+(test "test lvar basic" (run-Lvar '(let (y (+ 1 2)) y)) 3)
+(test "test lvar basic" (run-Lvar '(let (x 1) (let (y 2) (+ x y)))) 3)
