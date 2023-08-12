@@ -35,7 +35,15 @@
         [(list 'read) (Prim 'read '())]
         [n #:when (number? n) (Int n)]))
     (define/public (parse-program sexp)
-      (Program '() (parse-exp sexp)))))
+      (Program '() (parse-exp sexp)))
+    (define/public (emit-program p)
+      (match p
+        [(Program info body) (emit-exp body)]))
+    (define/public (emit-exp e)
+      (match e
+        [(Int n) n]
+        [(Prim op es) (cons op (for/list ([e es]) (emit-exp e)))]))))
+
 (define Lvar%
   (class Lint%
     (super-new)
@@ -48,7 +56,26 @@
       (match sexp
         [(list 'let (list x e) body) (Let x (parse-exp e) (parse-exp body))]
         [x #:when (symbol? x) (Var x)]
-        [else (super parse-exp sexp)]))))
+        [else (super parse-exp sexp)]))
+    (define/override (emit-exp e)
+      (match e
+        [(Var x) x]
+        [(Let x e body) (list 'let (list x (emit-exp e)) (emit-exp body))]
+        [else (super emit-exp e)]))
+    (define/public ((uniquify-exp env) e)
+        (match e
+          [(Var x) (Var (dict-ref env x))]
+          [(Int n) (Int n)]
+          [(Prim op es) (Prim op (for/list ([e es]) ((uniquify-exp env) e)))]
+          [(Let x e body)
+           (let* ([x-shadowed (dict-ref env x #f)]
+                  [x* (if x-shadowed (gensym) x)]
+                  [env* (dict-set env x x*)])
+             (Let x* ((uniquify-exp env*) e) ((uniquify-exp env*) body)))]
+          [else e]))
+      (define/public (uniquify-program p)
+        (match p
+          [(Program info body) (Program info ((uniquify-exp '()) body))]))))
 (define Cvar%
   (class Lvar%
     (super-new)
@@ -73,12 +100,19 @@
 (define (run-Lvar sexp)
   (define lvar (new Lvar%))
   ((send lvar interp-program '()) (send lvar parse-program sexp)))
+(define (uniq-Lvar sexp)
+  (define lvar (new Lvar%))
+  (send lvar emit-program (send lvar uniquify-program (send lvar parse-program sexp))))
 (define (assert msg bool)
   (unless bool (error msg)))
 (define (test name actual expected)
   (unless (= actual expected)
     (error (format "Test ~a failed: expected ~a, got ~a" name expected actual))))
-; (run-Lvar '(let (y (+ 1 2)) y))
-; (run-Lvar '(let (x 1) (let (y 2) (+ x y))))
+(uniq-Lvar '(let (y (+ 1 2)) y))
+(uniq-Lvar '(let (x 1) (let (y 2) (+ x y))))
+(uniq-Lvar '(let (x 1) (let (x 2) (+ x x))))
+(uniq-Lvar '(let (x 1) (+ (let (x 2) x) x)))
+(uniq-Lvar '(let (x 1) (+ (let (x 2) x) (let (x 3) x))))
+(uniq-Lvar '(let (y 1) (+ (let (x 2) x) (let (x 3) (+ x y)))))
 (test "test lvar basic" (run-Lvar '(let (y (+ 1 2)) y)) 3)
 (test "test lvar basic" (run-Lvar '(let (x 1) (let (y 2) (+ x y)))) 3)
