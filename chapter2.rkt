@@ -72,7 +72,6 @@
         [else (super parse-exp sexp)]))
     (define/override (emit-exp e)
       (match e
-        [(Var (Int x)) (list 'incorrect 'int x)]
         [(Var x) x]
         [(Let x e body) (list 'let (list x (emit-exp e)) (emit-exp body))]
         [else (super emit-exp e)]))
@@ -160,6 +159,7 @@
           [(Program info body) 
            (CProgram (make-hash info) (make-hash (list (cons 'start (explicate-tail body)))))]))))
 (define (generate-tmp-lets init tmps)
+  (display tmps)
   (foldr (lambda (tmp e**) (Let (car tmp) (cdr tmp) e**))
          init
          (reverse tmps)))
@@ -186,38 +186,68 @@
     (super-new)
     (define/public ((interp-exp env) e)
       (match e
-        [(Var x) (dict-ref env x)] ; assumes no clash with reg names
-        [(Deref reg int) (dict-ref env (+ (dict-ref env reg) int))]
-        [(Imm int) int]
-        [(Reg reg) (dict-ref env reg)]
+        [(Instr 'movq (list from to)) 
+         (display 'movq) (display env) (newline)
+         (define to- (interp-ref env to))
+         (define from- (interp-ref env from))
+         (dict-set! env (interp-symbol to) from-)]
+        [(Instr 'addq (list from to)) 
+         (display 'addq) (display env) (newline)
+         (define to- (interp-ref env to))
+         (define from- (interp-ref env from))
+         (dict-set! env (interp-symbol to) (+ to- from-))]
+        [(Instr 'subq (list from to)) 
+         (define to- (interp-ref env to))
+         (define from- (interp-ref env from))
+         (dict-set! env (interp-symbol to) (- to- from-))]
+        [(Instr 'negq (list to)) 
+         (define to- (interp-ref env to))
+         (dict-set! env (interp-symbol to) (- to-))]
         [(Callq label int) (dict-set! env 'rax (read))]
         [(Retq) '()] ; jmp to previous thing on stack, stop processing instructions in block
         [(Jmp label) (error 'interp-exp "jmp not implemented")]
         ;; TODO: What is for/each called? How to enable retq to short-circuit?
+        ;; TODO: Block probably shouldn't even be here. Maybe.
         [(Block info instructions) 
          (for/last ([instr instructions]) ((interp-exp (make-hash)) instr))])) ; info SHOULD have the env in it
+    ; TODO: This derefs too much; the target of a dict-set! needs a symbol, not a value
+    ; (but only Var and Reg have symbols)
+    (define/public (interp-symbol ref)
+      (match ref
+        [(Var x) x] ; assumes no clash with reg names
+        [(Reg reg) reg]))
+    (define/public (interp-ref env ref)
+      (match ref
+        [(Var x) (dict-ref env x 0)] ; assumes no clash with reg names
+        [(Deref reg int) (dict-ref env (+ (dict-ref env reg) int))]
+        [(Imm int) int]
+        [(Int int) int] ; ???? shouldn't be in this language
+        [(Reg reg) (dict-ref env reg 0)]))
     (define/public (interp-program p)
       (match p
-        [(X86Program info blocks) ((interp-exp (make-hash)) (dict-ref blocks 'start))]))
-    (define/public (emit-program p)
-      (match p
         [(X86Program info blocks) 
-         (for/list ([instr (dict-ref blocks 'start)]) (emit-instr instr ))]))
+         (define env (make-hash))
+         (for ([instr (dict-ref blocks 'start)]) ((interp-exp env) instr))
+         (dict-ref env 'rax)]))
     ; TODO: The emit is extremely loose. Improve the output here to figure out
     ; where the looseness is and how incorrect it is.
     (define/public (emit-instr instr) 
       (match instr
-        [(Var x) x] ; assumes no clash with reg names
-        [(Deref reg int) (list reg '% int)]
-        [(Imm int) int]
-        [(Reg reg) reg]
-        [(Instr op args) (cons op (for/list ([instr args]) (emit-instr instr)))]
+        [(Instr op args) (display args) (cons op (for/list ([arg args]) (emit-ref arg)))]
         [(Callq label int) (list 'call label int)]
         [(Retq) 'retq] ; jmp to previous thing on stack, stop processing instructions in block
-        [(Jmp label) (list 'jmp label)]
-        [(Int int) int] ; ???
-        [x #'when (symbol? x) x] ; ??
-        ))
+        [(Jmp label) (list 'jmp label)]))
+    (define/public (emit-ref ref)
+      (match ref
+        [(Var x) x]
+        [(Deref reg int) (list reg '% int)]
+        [(Imm int) int]
+        [(Int int) int] ; shouldn't be in this language, but select-instructions allows vars and ints still
+        [(Reg reg) reg]))
+    (define/public (emit-program p)
+      (match p
+        [(X86Program info blocks) 
+         (for/list ([instr (dict-ref blocks 'start)]) (emit-instr instr))]))
     (define/public (select-instructions-statement s)
       (match s
         [(Seq statements) 
@@ -229,22 +259,22 @@
         [(Assign var (Prim '- (list arg1))) 
          (list (Instr 'movq (list arg1 var)) (Instr 'negq (list var)))]
         [(Assign var (Prim 'read '())) 
-         (list (Callq 'read_int 0) (Instr 'movq (list 'rax var)))]
+         (list (Callq 'read_int 0) (Instr 'movq (list (Reg 'rax) var)))]
         [(Assign var (Var arg1)) 
          (list (Instr 'movq (list arg1 var)))]
         [(Assign var (Int int)) 
          (list (Instr 'movq (list var (Imm int))))]
         [(Assign var args)
          (error 'select-instructions-statement "Assign: ~a" args)]
-        [(Return (Var arg1)) (list (Instr 'movq (list arg1 'rax)) (Retq))] 
+        [(Return (Var arg1)) (list (Instr 'movq (list arg1 (Reg 'rax))) (Retq))] 
         [(Return (Prim op args)) 
          (append 
-           (select-instructions-statement (Assign 'rax (Prim op args)))
+           (select-instructions-statement (Assign (Reg 'rax) (Prim op args)))
            (list (Retq)))]))
     (define/public (select-instructions p) 
         (match p
-          [(Program info body) 
-           (X86Program info (list (cons 'start (select-instructions-statement body))))]))))
+          [(CProgram locals blocks) 
+           (X86Program locals (list (cons 'start (select-instructions-statement (dict-ref blocks 'start)))))]))))
 (define (interp-x86 p)
   (define block (match p ; :: (listof instruction)
    [(X86Program info blocks) (dict-ref blocks 'start)]))
@@ -282,6 +312,19 @@
                                    (send lvar parse-program sexp)))))
   (display (send cvar emit-program output))
   (send cvar interp-program output))
+(define (run-X86var sexp)
+  (define lvar (new Lvar%))
+  (define cvar (new Cvar%))
+  (define x86var (new X86var%))
+  (define output (send lvar explicate-control
+                       (send lvar remove-complex-operands-program
+                             (send lvar uniquify-program
+                                   (send lvar parse-program sexp)))))
+  (display (send cvar emit-program output))
+  (define instrs (send x86var select-instructions output))
+  (display (send x86var emit-program instrs))
+  (newline) (newline) (newline)
+  (send x86var interp-program instrs))
 (define (uniq-Lvar sexp)
   (define lvar (new Lvar%))
   (send lvar emit-program 
@@ -315,16 +358,6 @@
 (define (test name actual expected)
   (unless (= actual expected)
     (error (format "Test ~a failed: expected ~a, got ~a" name expected actual))))
-; (explicate-Lvar '(+ 42 (- 10)))
-; (explicate-Lvar '(+ 42 (+ (+ 3 4) 12)))
-; (explicate-Lvar '(+ (let (y (+ 3 4)) (+ y 5)) 12))
-; (explicate-Lvar '(let (a 42) (let (b a) b)))
-; (explicate-Lvar '(let (y (+ 1 2)) y))
-; (explicate-Lvar '(let (x 1) (let (y 2) (+ x y))))
-; (explicate-Lvar '(let (x 1) (let (x 2) (+ x x))))
-; (explicate-Lvar '(let (x 1) (+ (let (y 2) y) x)))
-; (explicate-Lvar '(let (x 1) (+ (let (x 2) x) (let (x 3) x))))
-; (explicate-Lvar '(let (y 1) (+ (let (x 2) x) (let (x 3) (+ x y)))))
 (define test-Lvar
   (lambda (name sexp)
     (display sexp)
@@ -332,7 +365,7 @@
     (define expected (run-Lvar sexp))
     (display expected)
     (newline)
-    (test name expected (run-Cvar sexp))))
+    (test name expected (run-X86var sexp))))
 (test "test lvar basic" (run-Lvar '(let (y (+ 1 2)) y)) 3)
 (test "test lvar basic" (run-Lvar '(let (x 1) (let (y 2) (+ x y)))) 3)
 (test-Lvar "test lvar remove complex operands" '(+ 42 (- 10)))
