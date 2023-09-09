@@ -1,9 +1,11 @@
-#lang racket
+#lang typed/racket
 (require racket/fixnum)
-(struct Program (info body))
-(struct Prim (op args))
-(struct Int (value))
+(define-type Exp (U Program Int Prim))
+(struct Program ([info : (Listof Any)] [body : Exp]))
+(struct Prim ([op : Symbol] [args : (Listof Exp)]))
+(struct Int ([value : Fixnum]))
 (define ast1 (Prim '+ (list (Int 8) (Int 15))))
+(: is-exp (-> Exp Boolean))
 (define is-exp 
   (match-lambda
     [(Int n) #t]
@@ -12,10 +14,12 @@
     [(Prim '+ (list e1 e2)) (and (is-exp e1) (is-exp e2))]
     [(Prim '- (list e1 e2)) (and (is-exp e1) (is-exp e2))]
     [else #f]))
+(: is-Lint (-> Program Boolean))
 (define is-Lint
   (match-lambda
-    [(Program '() a ) (is-exp a)]
+    [(Program '() a) (is-exp a)]
     [else #f]))
+(: interp-exp (-> Exp Fixnum))
 (define interp-exp
   (match-lambda
     [(Int n) n]
@@ -26,19 +30,24 @@
     [(Prim '- (list e)) (fx- 0 (interp-exp e))]
     [(Prim '+ (list e1 e2)) (fx+ (interp-exp e1) (interp-exp e2))]
     [(Prim '- (list e1 e2)) (fx- (interp-exp e1) (interp-exp e2))]))
+(: interp-Lint (-> Program Fixnum))
 (define interp-Lint
   (match-lambda
     [(Program '() a) (interp-exp a)]))
+(: pe-neg (-> Exp Exp))
 (define pe-neg
   (match-lambda
     [(Int n) (Int (fx- 0 n))]
     [r (Prim '- (list r))]))
-(define/match (pe-add r1 r2)
-  [((Int n1) (Int n2)) (Int (fx+ n1 n2))]
-  [(_ _) (Prim '+ (list r1 r2))])
-(define/match (pe-sub r1 r2)
-  [((Int n1) (Int n2)) (Int (fx- n1 n2))]
-  [(_ _) (Prim '- (list r1 r2))])
+(define (pe-add [r1 : Exp] [r2 : Exp]) : Exp
+  (match* (r1 r2)
+    [((Int n1) (Int n2)) (Int (fx+ n1 n2))]
+    [(_ _) (Prim '+ (list r1 r2))]))
+(define (pe-sub [r1 : Exp] [r2 : Exp]) : Exp
+  (match* (r1 r2)
+    [((Int n1) (Int n2)) (Int (fx- n1 n2))]
+    [(_ _) (Prim '- (list r1 r2))]))
+(: pe-exp (Exp -> Exp))
 (define pe-exp
   (match-lambda
     [(Int n) (Int n)]
@@ -46,18 +55,22 @@
     [(Prim '- (list e)) (pe-neg (pe-exp e))]
     [(Prim '+ (list e1 e2)) (pe-add (pe-exp e1) (pe-exp e2))]
     [(Prim '- (list e1 e2)) (pe-sub (pe-exp e1) (pe-exp e2))]))
+(: pe-Lint (Program -> Program))
 (define pe-Lint
   (match-lambda
     [(Program '() a) (Program '() (pe-exp a))]))
+(: assert (String Boolean -> Any))
 (define (assert msg bool)
   (unless bool (error msg)))
+(: parse-exp (Any -> Exp))
 (define parse-exp
   (match-lambda
     [(list '+ e1 e2) (Prim '+ (list (parse-exp e1) (parse-exp e2)))]
     [(list '- e1 e2) (Prim '- (list (parse-exp e1) (parse-exp e2)))]
     [(list '- e1) (Prim '- (list (parse-exp e1)))]
     [(list 'read) (Prim 'read '())]
-    [n #:when (number? n) (Int n)]))
+    [n #:when (fixnum? n) (Int n)]))
+(: parse-program (Any -> Program))
 (define (parse-program sexp)
   (Program '() (parse-exp sexp)))
 (pe-Lint (Program '() ast1))

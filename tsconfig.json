@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "strict": true,
+    "sourceMap": true,
+    "skipLibCheck": true
+  },
+  "files": ["chapter2.ts"]
+}

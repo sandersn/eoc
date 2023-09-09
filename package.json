@@ -1,0 +1,28 @@
+{
+  "name": "eoc",
+  "version": "1.0.0",
+  "description": "Implement Essentials of Compilation in Typescript",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandersn/eoc.git"
+  },
+  "keywords": [
+    "essentials",
+    "compilation",
+    "typescript"
+  ],
+  "author": "Nathan Shively-Sanders",
+  "license": "GPL-3.0-or-later",
+  "bugs": {
+    "url": "https://github.com/sandersn/eoc/issues"
+  },
+  "homepage": "https://github.com/sandersn/eoc#readme",
+  "devDependencies": {
+    "@types/node": "^20.6.0"
+  }
+}
