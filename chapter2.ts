@@ -138,6 +138,69 @@ class LInt {
     }
 }
 class LVar extends LInt {
+    removeComplexOperands(p: Program): Program {
+        return { ...p, body: this.removeComplexOperandsExp(p.body) }
+    }
+    removeComplexOperandsExp(e: Exp): Exp {
+        switch (e.kind) {
+            case "var":
+            case "int": return e
+            case "prim": {
+                if (e.op === "read") return e
+                if (e.args.length === 1) {
+                    const [tmp, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
+                    return generateTmpLets({ ...e, args: [tmp] }, tmps)
+                }
+                else if (e.args.length === 2) {
+                    const [tmp1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
+                    const [tmp2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
+                    return generateTmpLets({ ...e, args: [tmp1, tmp2] }, [...tmps1, ...tmps2])
+                }
+                else {
+                    throw new Error("Unexpected number of arguments")
+                }
+            }
+            case "let": {
+                    const [tmpE, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
+                    const [tmpBody, tmpsBody] = this.removeComplexOperandsAtom(e.body, true)
+                    return generateTmpLets({ ...e, exp: tmpE, body: generateTmpLets(tmpBody, tmpsBody) }, tmpsE)
+            }
+        }
+    }
+    removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
+        switch (e.kind) {
+            case "var":
+            case "int": return [e, []]
+            case "prim": {
+                const tmp = gensym()
+                if (e.op === "read") {
+                    return [{ kind: "var", name: tmp }, [[tmp, e]]]
+                } if (e.args.length === 1) {
+                    const [e1, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
+                    return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1] }], ...tmps]]
+                }
+                else if (e.args.length === 2) {
+                    const [e1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
+                    const [e2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
+                    const tmps = [...tmps1, ...tmps2]
+                    return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1, e2] }], ...tmps]]
+                }
+                else {
+                    throw new Error("Unexpected number of arguments")
+                }
+            }
+            case "let": {
+                const [e1, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
+                const [body1, tmpsBody] = this.removeComplexOperandsAtom(e.body, isTail)
+                if ((e1.kind === "var" || e1.kind === "int") && isTail) {
+                    return [{ kind: 'let', name: e.name, exp: e1, body: generateTmpLets(body1, tmpsBody)}, []]
+                }
+                const tmp = gensym()
+                return [{ kind: "var", name: tmp }, [[tmp, { ...e, exp: e1, body: generateTmpLets(body1, tmpsBody) }], ...tmpsE]]
+            }
+        }
+    }
+
     override interpExp(e: Exp, env: AList<string, number>): number {
         switch (e.kind) {
             case "var": {
@@ -174,6 +237,11 @@ class LVar extends LInt {
     }
 
 }
+function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
+    return tmps.reduce(
+        (e, [name, exp]) => ({ kind: "let", name, exp, body: e }), 
+        init)
+}
 function test(name: string, actual: number, expected: number) {
     if (actual !== expected) {
         console.log(`Test ${name} failed: expected ${expected}, actual ${actual}`)
@@ -193,10 +261,16 @@ function runUniquifyLvar(sexp: string) {
     console.log(l.emitProgram(p))
     return l.interpProgram(p);
 }
+function runRemoveComplexLvar(sexp: string) {
+    const l = new LVar();
+    const p = l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp)))
+    console.log(l.emitProgram(p))
+    return l.interpProgram(p);
+}
 function testLvar(name: string, sexp: string) {
     const expected = runLvar(sexp)
     console.log("\t", sexp, "-->", expected)
-    test(name, runUniquifyLvar(sexp), expected)
+    test(name, runRemoveComplexLvar(sexp), expected)
 }
 test("test list basic", runLint("(+ 1 2)"), 3)
 test("test lint basic", runLint('(+ (+ 3 4) 12))'), 19)
