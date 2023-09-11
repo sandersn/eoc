@@ -2,8 +2,9 @@ import assert from "node:assert";
 type Program = { kind: "program"; info: AList<string, number>; body: Exp };
 /** for Language */
 type Var = { kind: "var"; name: string };
+type Prim = { kind: "prim"; op: string; args: Exp[] };
 type Exp =
-  | { kind: "prim"; op: string; args: Exp[] }
+  | Prim
   | Var
   | { kind: "int"; val: number }
   | { kind: "let"; name: string; exp: Exp; body: Exp };
@@ -18,7 +19,23 @@ type CProgram = {
   body: Map<string, Stmt>;
 };
 /** for ASM */
-type Instr = {};
+type Ref =
+  | Var
+  | { kind: "imm"; int: number }
+  | { kind: "reg"; reg: string }
+  | { kind: "deref"; reg: string; offset: number };
+type Block = { kind: "block"; info: unknown; instructions: Instr[] };
+type Instr =
+  | { kind: "instr"; op: string; args: Ref[] }
+  | { kind: "callq"; label: string; int: number }
+  | { kind: "ret" }
+  | { kind: "jmp"; label: string }
+  | Block;
+type X86Program = {
+  info: Map<string, number>;
+  blocks: Map<string, Block>;
+};
+
 /** Read a number from stdin
  * use readline something something can't be bothered
  */
@@ -47,15 +64,15 @@ class AList<K, V> {
   toMap(m: Map<K, V>) {
     m.set(this.key, this.value);
     if (this.next) this.next.toMap(m);
-    return m
+    return m;
   }
   static fromMap<K, V>(m: Map<K, V>): AList<K, V> {
     let alist: AList<K, V> | undefined = undefined;
     for (const [k, v] of m) {
-      alist = new AList(k, v, alist)
+      alist = new AList(k, v, alist);
     }
     assert(alist);
-    return alist
+    return alist;
   }
 }
 enum Token {
@@ -193,7 +210,7 @@ class LInt {
       case "int":
         return `${e.val}`;
       case "prim":
-        return `(${e.op} ${e.args.map((a) => this.emitExp(a)).join(" ")})`;
+        return `(${e.op} ${e.args.map(a => this.emitExp(a)).join(" ")})`;
       case "var":
         return e.name;
       case "let":
@@ -337,7 +354,7 @@ class LVar extends LInt {
       case "int":
         return e;
       case "prim":
-        return { ...e, args: e.args.map((a) => this.uniquifyExp(a, env)) };
+        return { ...e, args: e.args.map(a => this.uniquifyExp(a, env)) };
       case "let": {
         let x = env.get(e.name) ? gensym() : e.name;
         env = new AList(e.name, x, env);
@@ -402,6 +419,120 @@ class LVar extends LInt {
   }
 }
 class CVar {
+  selectInstructions(p: CProgram): X86Program {
+    return {
+      info: p.locals,
+      blocks: new Map([
+        [
+          "start",
+          {
+            kind: "block",
+            info: p.locals,
+            instructions: this.selectInstructionsStmt(
+              assertDefined(p.body.get("start"))
+            ),
+          },
+        ],
+      ]),
+    };
+  }
+  selectInstructionsExp(e: Exp, to: Ref): Instr[] {
+    switch (e.kind) {
+      case "prim":
+        return this.selectInstructionsPrim(e, to);
+      case "int":
+        return [
+          {
+            kind: "instr",
+            op: "movq",
+            args: [{ kind: "imm", int: e.val }, to],
+          },
+        ];
+      case "var":
+        return [{ kind: "instr", op: "movq", args: [e, to] }];
+      case "let":
+        throw new Error("Unexpected let on rhs of assignment.");
+    }
+  }
+  selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
+    switch (e.op) {
+      case "read":
+        return [
+          { kind: "callq", label: "read_int", int: 0 },
+          {
+            kind: "instr",
+            op: "movq",
+            args: [{ kind: "reg", reg: "rax" }, to],
+          },
+        ];
+      case "+":
+        return [
+          {
+            kind: "instr",
+            op: "movq",
+            args: [this.selectInstructionsAtom(e.args[0]), to],
+          },
+          {
+            kind: "instr",
+            op: "addq",
+            args: [this.selectInstructionsAtom(e.args[1]), to],
+          },
+        ];
+      case "-":
+        if (e.args.length === 1) {
+          return [
+            {
+              kind: "instr",
+              op: "movq",
+              args: [this.selectInstructionsAtom(e.args[0]), to],
+            },
+            {
+              kind: "instr",
+              op: "negq",
+              args: [to],
+            },
+          ];
+        } else {
+          return [
+            {
+              kind: "instr",
+              op: "movq",
+              args: [this.selectInstructionsAtom(e.args[0]), to],
+            },
+            {
+              kind: "instr",
+              op: "subq",
+              args: [this.selectInstructionsAtom(e.args[1]), to],
+            },
+          ];
+        }
+      default:
+        throw new Error("Unexpected primitive");
+    }
+  }
+  selectInstructionsStmt(s: Stmt): Instr[] {
+    switch (s.kind) {
+      case "assign":
+        return this.selectInstructionsExp(s.exp, s.var);
+      case "return":
+        return this.selectInstructionsExp(s.exp, { kind: "reg", reg: "rax" });
+      case "seq":
+        return s.statements.flatMap(s => this.selectInstructionsStmt(s));
+    }
+  }
+  selectInstructionsAtom(e: Exp): Ref {
+    switch (e.kind) {
+      case "int":
+        return { kind: "imm", int: e.val };
+      case "var":
+        return e;
+      case "prim":
+      case "let":
+        throw new Error(
+          "Unexpected non-atomic expression in selectInstructionsAtom"
+        );
+    }
+  }
   constructor(public readonly lvar: LVar) {}
   interpStatement(e: Stmt, env: Map<string, number>): number {
     switch (e.kind) {
@@ -426,11 +557,124 @@ class CVar {
       case "return":
         return `return ${this.lvar.emitExp(e.exp)};\n`;
       case "seq":
-        return e.statements.map((s) => this.emitStatement(s)).join("");
+        return e.statements.map(s => this.emitStatement(s)).join("");
     }
   }
   emitProgram(p: CProgram): string {
     return this.emitStatement(assertDefined(p.body.get("start")));
+  }
+}
+class X86Var {
+  interpProgram(xp: X86Program) {
+    assertDefined(xp.blocks.get("start")).instructions.forEach(b =>
+      this.interpInstr(b, xp.info)
+    );
+  }
+  emitProgram(xp: X86Program): string {
+    return xp.blocks
+      .get("start")!
+      .instructions.map(b => this.emitInstr(b))
+      .join("\n");
+  }
+  emitInstr(e: Instr): string {
+    switch (e.kind) {
+      case "instr":
+        return `${e.op} ${e.args.map(a => this.emitRef(a)).join(", ")}`;
+      case "callq":
+        return `callq ${e.label}`;
+      case "ret":
+        return "ret";
+      case "jmp":
+        return `jmp ${e.label}`;
+      case "block":
+        return `.${e.info}:\n${e.instructions
+          .map(i => this.emitInstr(i))
+          .join("\n")}`;
+    }
+  }
+  emitRef(r: Ref): string {
+    switch (r.kind) {
+      case "imm":
+        return `$${r.int}`;
+      case "var":
+        return r.name;
+      case "reg":
+        return `%${r.reg}`;
+      case "deref":
+        return `${r.offset}(%${r.reg})`;
+    }
+  }
+  // TODO: Initialise this to something (or make accesses default to 0)
+  stack: number[] = [];
+  registers: Map<string, number> = new Map();
+  interpInstr(e: Instr, env: Map<string, number>): void {
+    switch (e.kind) {
+      case "instr": {
+        switch (e.op) {
+          case "movq": {
+            const from1 = this.interpRef(e.args[0], env);
+            this.registers.set(this.interpSymbol(e.args[1]), from1);
+            break;
+          }
+          case "addq": {
+            const from1 = this.interpRef(e.args[0], env);
+            const to1 = this.interpRef(e.args[1], env);
+            this.registers.set(this.interpSymbol(e.args[1]), to1 + from1);
+            break;
+          }
+          case "subq": {
+            const from1 = this.interpRef(e.args[0], env);
+            const to1 = this.interpRef(e.args[1], env);
+            this.registers.set(this.interpSymbol(e.args[1]), to1 - from1);
+            break;
+          }
+          case "negq": {
+            const from1 = this.interpRef(e.args[0], env);
+            this.registers.set(this.interpSymbol(e.args[0]), -from1);
+            break;
+          }
+        }
+        break;
+      }
+      case "callq":
+        this.registers.set("rax", read());
+        break;
+      case "ret":
+        break; // TODO: implement ret by popping from the function stack and
+      // resetting the instruction pointer
+      case "jmp":
+        break; // TODO: implement jmp by changing the instruction pointer
+      case "block":
+        // TODO: THis is OK for now but will need an explicit instruction pointer
+        // to get jmp working
+        for (const i of e.instructions) {
+          this.interpInstr(i, env);
+        }
+        break;
+    }
+  }
+  interpRef(r: Ref, env: Map<string, number>): number {
+    switch (r.kind) {
+      case "imm":
+        return r.int;
+      case "var":
+        return this.registers.get(r.name) ?? 0;
+      case "reg":
+        return this.registers.get(r.reg) ?? 0;
+      case "deref":
+        return assertDefined(this.stack[this.registers.get(r.reg)! + r.offset]);
+    }
+  }
+  interpSymbol(r: Ref) {
+    switch (r.kind) {
+      case "var":
+        return r.name;
+      case "reg":
+        return r.reg;
+      case "deref":
+      case "imm":
+        throw new Error("not a ref");
+    }
   }
 }
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
@@ -466,15 +710,30 @@ function runRemoveComplexLvar(sexp: string) {
 }
 function runExplicateControl(sexp: string) {
   const l = new LVar();
-  const c = new CVar(l)
-  const p = l.explicateControl(l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp))))
+  const c = new CVar(l);
+  const p = l.explicateControl(
+    l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp)))
+  );
   console.log(c.emitProgram(p));
   return c.interpProgram(p);
+}
+function runSelectInstructions(sexp: string) {
+  const l = new LVar();
+  const c = new CVar(l);
+  const x = new X86Var();
+  const p = l.explicateControl(
+    l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp)))
+  );
+//   console.log(c.emitProgram(p));
+  const xp = c.selectInstructions(p);
+//   console.log(x.emitProgram(xp));
+  x.interpProgram(xp);
+  return x.registers.get("rax")!;
 }
 function testLvar(name: string, sexp: string) {
   const expected = runLvar(sexp);
   console.log("\t", sexp, "-->", expected);
-  test(name, runExplicateControl(sexp), expected);
+  test(name, runSelectInstructions(sexp), expected);
 }
 test("test list basic", runLint("(+ 1 2)"), 3);
 test("test lint basic", runLint("(+ (+ 3 4) 12))"), 19);
