@@ -3,16 +3,9 @@ type Program = { kind: "program"; info: AList<string, number>; body: Exp };
 /** for Language */
 type Var = { kind: "var"; name: string };
 type Prim = { kind: "prim"; op: string; args: Exp[] };
-type Exp =
-  | Prim
-  | Var
-  | { kind: "int"; val: number }
-  | { kind: "let"; name: string; exp: Exp; body: Exp };
+type Exp = Prim | Var | { kind: "int"; val: number } | { kind: "let"; name: string; exp: Exp; body: Exp };
 /** for C */
-type Stmt =
-  | { kind: "assign"; var: Var; exp: Exp }
-  | { kind: "seq"; statements: Stmt[] }
-  | { kind: "return"; exp: Exp };
+type Stmt = { kind: "assign"; var: Var; exp: Exp } | { kind: "seq"; statements: Stmt[] } | { kind: "return"; exp: Exp };
 type CProgram = {
   kind: "cprogram";
   locals: Map<string, number>;
@@ -24,7 +17,11 @@ type Ref =
   | { kind: "imm"; int: number }
   | { kind: "reg"; reg: string }
   | { kind: "deref"; reg: string; offset: number };
-type Block = { kind: "block"; info: unknown; instructions: Instr[] };
+type Block = {
+  kind: "block";
+  info: Map<string, number>;
+  instructions: Instr[];
+};
 type Instr =
   | { kind: "instr"; op: string; args: Ref[] }
   | { kind: "callq"; label: string; int: number }
@@ -47,7 +44,7 @@ function gensym() {
   return "g" + counter++;
 }
 function assertDefined<T>(e: T | undefined): T {
-  assert(e);
+  assert(e !== undefined);
   return e;
 }
 class AList<K, V> {
@@ -138,16 +135,9 @@ class LInt {
         return e.val;
       case "prim":
         if (e.op === "read") return +read();
-        if (e.op === "+")
-          return (
-            this.interpExp(e.args[0], env) + this.interpExp(e.args[1], env)
-          );
-        if (e.op === "-" && e.args.length === 1)
-          return -this.interpExp(e.args[0], env);
-        if (e.op === "-" && e.args.length === 2)
-          return (
-            this.interpExp(e.args[0], env) - this.interpExp(e.args[1], env)
-          );
+        if (e.op === "+") return this.interpExp(e.args[0], env) + this.interpExp(e.args[1], env);
+        if (e.op === "-" && e.args.length === 1) return -this.interpExp(e.args[0], env);
+        if (e.op === "-" && e.args.length === 2) return this.interpExp(e.args[0], env) - this.interpExp(e.args[1], env);
       default:
         return NaN;
     }
@@ -179,11 +169,7 @@ class LInt {
         case Token.Identifier:
           return { kind: "var", name: lexer.value() };
         default:
-          throw new Error(
-            `Unexpected token at ${lexer.pos()}: ${Token[t]} [${sexp.slice(
-              lexer.pos()
-            )}]`
-          );
+          throw new Error(`Unexpected token at ${lexer.pos()}: ${Token[t]} [${sexp.slice(lexer.pos())}]`);
       }
     }
     function parseLet(): Exp {
@@ -214,9 +200,7 @@ class LInt {
       case "var":
         return e.name;
       case "let":
-        return `(let (${e.name} ${this.emitExp(e.exp)}) ${this.emitExp(
-          e.body
-        )})`;
+        return `(let (${e.name} ${this.emitExp(e.exp)}) ${this.emitExp(e.body)})`;
     }
   }
 }
@@ -235,39 +219,21 @@ class LVar extends LInt {
           const [tmp, tmps] = this.removeComplexOperandsAtom(e.args[0], false);
           return generateTmpLets({ ...e, args: [tmp] }, tmps);
         } else if (e.args.length === 2) {
-          const [tmp1, tmps1] = this.removeComplexOperandsAtom(
-            e.args[0],
-            false
-          );
-          const [tmp2, tmps2] = this.removeComplexOperandsAtom(
-            e.args[1],
-            false
-          );
-          return generateTmpLets({ ...e, args: [tmp1, tmp2] }, [
-            ...tmps1,
-            ...tmps2,
-          ]);
+          const [tmp1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false);
+          const [tmp2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false);
+          return generateTmpLets({ ...e, args: [tmp1, tmp2] }, [...tmps1, ...tmps2]);
         } else {
           throw new Error("Unexpected number of arguments");
         }
       }
       case "let": {
         const [tmpE, tmpsE] = this.removeComplexOperandsAtom(e.exp, false);
-        const [tmpBody, tmpsBody] = this.removeComplexOperandsAtom(
-          e.body,
-          true
-        );
-        return generateTmpLets(
-          { ...e, exp: tmpE, body: generateTmpLets(tmpBody, tmpsBody) },
-          tmpsE
-        );
+        const [tmpBody, tmpsBody] = this.removeComplexOperandsAtom(e.body, true);
+        return generateTmpLets({ ...e, exp: tmpE, body: generateTmpLets(tmpBody, tmpsBody) }, tmpsE);
       }
     }
   }
-  removeComplexOperandsAtom(
-    e: Exp,
-    isTail: boolean
-  ): [Exp, Array<[string, Exp]>] {
+  removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
     switch (e.kind) {
       case "var":
       case "int":
@@ -279,28 +245,19 @@ class LVar extends LInt {
         }
         if (e.args.length === 1) {
           const [e1, tmps] = this.removeComplexOperandsAtom(e.args[0], false);
-          return [
-            { kind: "var", name: tmp },
-            [[tmp, { ...e, args: [e1] }], ...tmps],
-          ];
+          return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1] }], ...tmps]];
         } else if (e.args.length === 2) {
           const [e1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false);
           const [e2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false);
           const tmps = [...tmps1, ...tmps2];
-          return [
-            { kind: "var", name: tmp },
-            [[tmp, { ...e, args: [e1, e2] }], ...tmps],
-          ];
+          return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1, e2] }], ...tmps]];
         } else {
           throw new Error("Unexpected number of arguments");
         }
       }
       case "let": {
         const [e1, tmpsE] = this.removeComplexOperandsAtom(e.exp, false);
-        const [body1, tmpsBody] = this.removeComplexOperandsAtom(
-          e.body,
-          isTail
-        );
+        const [body1, tmpsBody] = this.removeComplexOperandsAtom(e.body, isTail);
         if ((e1.kind === "var" || e1.kind === "int") && isTail) {
           return [
             {
@@ -315,10 +272,7 @@ class LVar extends LInt {
         const tmp = gensym();
         return [
           { kind: "var", name: tmp },
-          [
-            [tmp, { ...e, exp: e1, body: generateTmpLets(body1, tmpsBody) }],
-            ...tmpsE,
-          ],
+          [[tmp, { ...e, exp: e1, body: generateTmpLets(body1, tmpsBody) }], ...tmpsE],
         ];
       }
     }
@@ -330,10 +284,7 @@ class LVar extends LInt {
         return assertDefined(env.get(e.name));
       }
       case "let":
-        return this.interpExp(
-          e.body,
-          new AList(e.name, this.interpExp(e.exp, env), env)
-        );
+        return this.interpExp(e.body, new AList(e.name, this.interpExp(e.exp, env), env));
       default:
         return super.interpExp(e, env);
     }
@@ -341,10 +292,7 @@ class LVar extends LInt {
   uniquifyProgram(p: Program): Program {
     return {
       ...p,
-      body: this.uniquifyExp(
-        p.body,
-        new AList("!!!!!!", "@@@@@@@@@", undefined)
-      ),
+      body: this.uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)),
     };
   }
   uniquifyExp(e: Exp, env: AList<string, string>): Exp {
@@ -372,16 +320,9 @@ class LVar extends LInt {
       case "var":
       case "int":
       case "prim":
-        return [
-          { kind: "assign", var: { kind: "var", name: x }, exp: e },
-          ...k,
-        ];
+        return [{ kind: "assign", var: { kind: "var", name: x }, exp: e }, ...k];
       case "let": {
-        return this.explicateAssign(
-          e.exp,
-          e.name,
-          this.explicateAssign(e.body, x, k)
-        );
+        return this.explicateAssign(e.exp, e.name, this.explicateAssign(e.body, x, k));
       }
     }
   }
@@ -411,26 +352,47 @@ class LVar extends LInt {
     }
   }
   explicateControl(p: Program): CProgram {
+    const c = new CVar(this);
+    const start = this.explicateTail(p.body);
     return {
       kind: "cprogram",
-      locals: p.info.toMap(new Map()),
-      body: new Map([["start", this.explicateTail(p.body)]]),
+      locals: c.typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
+      body: new Map([["start", start]]),
     };
   }
 }
 class CVar {
+  /** Doesn't actually type check currently, but binds name to index */
+  typeCheck(s: Stmt): Map<string, number> {
+    const env: Map<string, number> = new Map();
+    let i = 1;
+    function worker(s: Stmt): void {
+      switch (s.kind) {
+        case "assign":
+          env.set(s.var.name, i);
+          i++;
+          break;
+        case "return":
+          break;
+        case "seq":
+          for (const statement of s.statements) worker(statement);
+          break;
+      }
+    }
+    worker(s);
+    return env;
+  }
   selectInstructions(p: CProgram): X86Program {
+    const start = assertDefined(p.body.get("start"));
     return {
-      info: p.locals,
+      info: p.locals, // for now; the only block is :start
       blocks: new Map([
         [
           "start",
           {
             kind: "block",
             info: p.locals,
-            instructions: this.selectInstructionsStmt(
-              assertDefined(p.body.get("start"))
-            ),
+            instructions: this.selectInstructionsStmt(assertDefined(start)),
           },
         ],
       ]),
@@ -528,9 +490,7 @@ class CVar {
         return e;
       case "prim":
       case "let":
-        throw new Error(
-          "Unexpected non-atomic expression in selectInstructionsAtom"
-        );
+        throw new Error("Unexpected non-atomic expression in selectInstructionsAtom");
     }
   }
   constructor(public readonly lvar: LVar) {}
@@ -565,10 +525,78 @@ class CVar {
   }
 }
 class X86Var {
+  patchInstructions(p: X86Program): X86Program {
+    const start = assertDefined(p.blocks.get("start"));
+    return {
+      info: p.info,
+      blocks: p.blocks.set("start", {
+        ...start,
+        instructions: start.instructions.flatMap(i => this.patchInstructionsInstr(i)),
+      }),
+    };
+  }
+  patchInstructionsInstr(i: Instr): Instr[] {
+    switch (i.kind) {
+      case "instr":
+        if (i.args.length === 2 && i.args[0].kind === "deref" && i.args[1].kind === "deref") {
+          return [
+            {
+              kind: "instr",
+              op: "movq",
+              args: [i.args[0], { kind: "reg", reg: "rax" }],
+            },
+            {
+              kind: "instr",
+              op: i.op,
+              args: [{ kind: "reg", reg: "rax" }, i.args[1]],
+            },
+          ];
+        }
+      // fall through
+      case "callq":
+      case "ret":
+      case "jmp":
+      case "block":
+        return [i];
+    }
+  }
+  assignHomes(p: X86Program): X86Program {
+    return {
+      info: p.info,
+      blocks: p.blocks.set("start", this.assignHomesInstr(p.info, assertDefined(p.blocks.get("start"))) as Block),
+    };
+  }
+  assignHomesInstr(info: Map<string, number>, i: Instr): Instr {
+    switch (i.kind) {
+      case "instr":
+        return { ...i, args: i.args.map(a => this.assignHomesRef(info, a)) };
+      case "callq":
+      case "ret":
+      case "jmp":
+        return i;
+      case "block":
+        return {
+          ...i,
+          instructions: i.instructions.map(i => this.assignHomesInstr(info, i)),
+        };
+    }
+  }
+  assignHomesRef(info: Map<string, number>, a: Ref): Ref {
+    switch (a.kind) {
+      case "imm":
+      case "reg":
+      case "deref":
+        return a;
+      case "var":
+        return {
+          kind: "deref",
+          reg: "rbp",
+          offset: -8 * assertDefined(info.get(a.name)),
+        };
+    }
+  }
   interpProgram(xp: X86Program) {
-    assertDefined(xp.blocks.get("start")).instructions.forEach(b =>
-      this.interpInstr(b, xp.info)
-    );
+    assertDefined(xp.blocks.get("start")).instructions.forEach(b => this.interpInstr(b, xp.info));
   }
   emitProgram(xp: X86Program): string {
     return xp.blocks
@@ -587,9 +615,7 @@ class X86Var {
       case "jmp":
         return `jmp ${e.label}`;
       case "block":
-        return `.${e.info}:\n${e.instructions
-          .map(i => this.emitInstr(i))
-          .join("\n")}`;
+        return `.${e.info}:\n${e.instructions.map(i => this.emitInstr(i)).join("\n")}`;
     }
   }
   emitRef(r: Ref): string {
@@ -613,24 +639,24 @@ class X86Var {
         switch (e.op) {
           case "movq": {
             const from1 = this.interpRef(e.args[0], env);
-            this.registers.set(this.interpSymbol(e.args[1]), from1);
+            this.write(e.args[1], from1);
             break;
           }
           case "addq": {
             const from1 = this.interpRef(e.args[0], env);
             const to1 = this.interpRef(e.args[1], env);
-            this.registers.set(this.interpSymbol(e.args[1]), to1 + from1);
+            this.write(e.args[1], to1 + from1);
             break;
           }
           case "subq": {
             const from1 = this.interpRef(e.args[0], env);
             const to1 = this.interpRef(e.args[1], env);
-            this.registers.set(this.interpSymbol(e.args[1]), to1 - from1);
+            this.write(e.args[1], to1 - from1);
             break;
           }
           case "negq": {
             const from1 = this.interpRef(e.args[0], env);
-            this.registers.set(this.interpSymbol(e.args[0]), -from1);
+            this.write(e.args[0], -from1);
             break;
           }
         }
@@ -662,26 +688,27 @@ class X86Var {
       case "reg":
         return this.registers.get(r.reg) ?? 0;
       case "deref":
-        return assertDefined(this.stack[this.registers.get(r.reg)! + r.offset]);
+        return assertDefined(this.stack[(this.registers.get(r.reg) ?? 0) + r.offset]);
     }
   }
-  interpSymbol(r: Ref) {
+  write(r: Ref, source: number) {
     switch (r.kind) {
       case "var":
-        return r.name;
+        this.registers.set(r.name, source);
+        break;
       case "reg":
-        return r.reg;
+        this.registers.set(r.reg, source);
+        break;
       case "deref":
+        this.stack[(this.registers.get(r.reg) ?? 0) + r.offset] = source;
+        break;
       case "imm":
         throw new Error("not a ref");
     }
   }
 }
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
-  return tmps.reduce(
-    (e, [name, exp]) => ({ kind: "let", name, exp, body: e }),
-    init
-  );
+  return tmps.reduce((e, [name, exp]) => ({ kind: "let", name, exp, body: e }), init);
 }
 function test(name: string, actual: number, expected: number) {
   if (actual !== expected) {
@@ -711,29 +738,25 @@ function runRemoveComplexLvar(sexp: string) {
 function runExplicateControl(sexp: string) {
   const l = new LVar();
   const c = new CVar(l);
-  const p = l.explicateControl(
-    l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp)))
-  );
+  const p = l.explicateControl(l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp))));
   console.log(c.emitProgram(p));
   return c.interpProgram(p);
 }
-function runSelectInstructions(sexp: string) {
+function runAssignHomes(sexp: string) {
   const l = new LVar();
   const c = new CVar(l);
   const x = new X86Var();
-  const p = l.explicateControl(
-    l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp)))
-  );
-//   console.log(c.emitProgram(p));
-  const xp = c.selectInstructions(p);
-//   console.log(x.emitProgram(xp));
+  const p = l.explicateControl(l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp))));
+  // console.log(c.emitProgram(p));
+  const xp = x.patchInstructions(x.assignHomes(c.selectInstructions(p)));
+  console.log(x.emitProgram(xp));
   x.interpProgram(xp);
   return x.registers.get("rax")!;
 }
 function testLvar(name: string, sexp: string) {
   const expected = runLvar(sexp);
   console.log("\t", sexp, "-->", expected);
-  test(name, runSelectInstructions(sexp), expected);
+  test(name, runAssignHomes(sexp), expected);
 }
 test("test list basic", runLint("(+ 1 2)"), 3);
 test("test lint basic", runLint("(+ (+ 3 4) 12))"), 19);
