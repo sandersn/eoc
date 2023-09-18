@@ -523,12 +523,14 @@ class CVar {
   }
 }
 class X86Var {
-  // TODO: Initialise this to something (or make accesses default to 0)
   stack: number[] = []
   registers: Map<string, number> = new Map()
   block: Block | undefined
   blocks: Map<string, Block> = new Map()
   emitPreludeConclusion(p: X86Program): X86Program {
+    const start = assertDefined(p.blocks.get("start"))
+    start.instructions.push({ kind: "jmp", label: "conclusion" })
+    const stackSize = start.info.size * 8 + 8
     p.blocks.set("main", {
       kind: "block",
       info: new Map(),
@@ -546,7 +548,7 @@ class X86Var {
           kind: "instr",
           op: "subq",
           args: [
-            { kind: "imm", int: 16 },
+            { kind: "imm", int: stackSize },
             { kind: "reg", reg: "rsp" },
           ],
         },
@@ -561,11 +563,11 @@ class X86Var {
           kind: "instr",
           op: "addq",
           args: [
-            { kind: "imm", int: 16 },
+            { kind: "imm", int: stackSize },
             { kind: "reg", reg: "rsp" },
           ],
         },
-        { kind: "instr", op: "pushq", args: [{ kind: "reg", reg: "rbp" }] },
+        { kind: "instr", op: "popq", args: [{ kind: "reg", reg: "rbp" }] },
         { kind: "ret" },
       ],
     })
@@ -687,26 +689,36 @@ class X86Var {
   interpBlock(e: Block): "jmp" | undefined {
     for (const i of e.instructions) {
       const result = this.interpInstr(i, e.info)
-      if (result === 'jmp') {
+      if (result === "jmp") {
         return result
-      }
-      else if (result === 'ret') {
+      } else if (result === "ret") {
         return
       }
     }
   }
   interpInstr(e: Instr, env: Map<string, number>): "ret" | "jmp" | undefined {
+            const rsp = { kind: "reg", reg: "rsp" } as const
     switch (e.kind) {
       case "instr": {
         switch (e.op) {
           case "movq":
-            return this.write(e.args[1], this.interpRef(e.args[0], env))
+            return this.write(e.args[1], this.interpRef(e.args[0]))
           case "addq":
-            return this.write(e.args[1], this.interpRef(e.args[1], env) + this.interpRef(e.args[0], env))
+            return this.write(e.args[1], this.interpRef(e.args[1]) + this.interpRef(e.args[0]))
           case "subq":
-            return this.write(e.args[1], this.interpRef(e.args[1], env) - this.interpRef(e.args[0], env))
+            return this.write(e.args[1], this.interpRef(e.args[1]) - this.interpRef(e.args[0]))
           case "negq":
-            return this.write(e.args[0], -this.interpRef(e.args[0], env))
+            return this.write(e.args[0], -this.interpRef(e.args[0]))
+          case "popq":
+            this.write(e.args[0], this.stack[this.interpRef(rsp)])
+            this.write(rsp, this.interpRef(rsp) + 8)
+            return
+          case "pushq":
+            this.write(rsp, this.interpRef(rsp) - 8)
+            this.stack[this.interpRef(rsp)] = this.interpRef(e.args[0])
+            return
+          default:
+            throw new Error("unexpected instruction: " + e.op)
         }
       }
       case "callq":
@@ -719,7 +731,7 @@ class X86Var {
         return "jmp"
     }
   }
-  interpRef(r: Ref, env: Map<string, number>): number {
+  interpRef(r: Ref): number {
     switch (r.kind) {
       case "imm":
         return r.int
