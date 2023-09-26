@@ -1,5 +1,11 @@
 import assert from "node:assert"
-type Program = { kind: "program"; info: AList<string, number>; body: Exp }
+import { assertDefined } from "./core.js"
+import { DirectedGraph } from "./graph.js"
+type Program = {
+  kind: "program"
+  info: AList<string, number>
+  body: Exp
+}
 /** for Language */
 type Var = { kind: "var"; name: string }
 type Prim = { kind: "prim"; op: string; args: Exp[] }
@@ -17,8 +23,9 @@ type Ref =
   | { kind: "imm"; int: number }
   | { kind: "reg"; reg: string }
   | { kind: "deref"; reg: string; offset: number }
+type Ops = "addq" | "subq" | "negq" | "movq" | "pushq" | "popq"
 type Instr =
-  | { kind: "instr"; op: string; args: Ref[] }
+  | { kind: "instr"; op: Ops; args: Ref[] }
   | { kind: "callq"; label: string; int: number }
   | { kind: "ret" }
   | { kind: "jmp"; label: string }
@@ -28,7 +35,11 @@ type X86Program = {
 }
 type Block = {
   kind: "block"
-  info: Map<string, number>
+  info: {
+    locals: Map<string, number>
+    references: Array<Set<string>>
+    conflicts: DirectedGraph<string>
+  }
   instructions: Instr[]
 }
 /** Read a number from stdin
@@ -40,10 +51,6 @@ function read() {
 let counter = 0
 function gensym() {
   return "g" + counter++
-}
-function assertDefined<T>(e: T | undefined): T {
-  assert(e !== undefined)
-  return e
 }
 class AList<K, V> {
   constructor(public key: K, public value: V, public next?: AList<K, V>) {}
@@ -258,12 +265,15 @@ class LVar extends LInt {
         const [body1, tmpsBody] = this.removeComplexOperandsAtom(e.body, isTail)
         if ((e1.kind === "var" || e1.kind === "int") && isTail) {
           return [
-            {
-              kind: "let",
-              name: e.name,
-              exp: e1,
-              body: generateTmpLets(body1, tmpsBody),
-            },
+            generateTmpLets(
+              {
+                kind: "let",
+                name: e.name,
+                exp: e1,
+                body: generateTmpLets(body1, tmpsBody),
+              },
+              tmpsE
+            ),
             [],
           ]
         }
@@ -389,7 +399,7 @@ class CVar {
           "start",
           {
             kind: "block",
-            info: p.locals,
+            info: { locals: p.locals, references: [], conflicts: new DirectedGraph() },
             instructions: this.selectInstructionsStmt(assertDefined(start)),
           },
         ],
@@ -530,10 +540,10 @@ class X86Var {
   emitPreludeConclusion(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
     start.instructions.push({ kind: "jmp", label: "conclusion" })
-    const stackSize = start.info.size * 8 + 8
+    const stackSize = start.info.locals.size * 8 + 8
     p.blocks.set("main", {
       kind: "block",
-      info: new Map(),
+      info: { locals: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         { kind: "instr", op: "pushq", args: [{ kind: "reg", reg: "rbp" }] },
         {
@@ -557,7 +567,7 @@ class X86Var {
     })
     p.blocks.set("conclusion", {
       kind: "block",
-      info: new Map(),
+      info: { locals: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         {
           kind: "instr",
@@ -607,6 +617,102 @@ class X86Var {
         return [i]
     }
   }
+  buildInterference(p: X86Program): void {
+    this.interferenceBlock(assertDefined(p.blocks.get("start")))
+  }
+  interferenceBlock(block: Block): void {
+    for (let i = 0; i < block.instructions.length; i++) {
+      const instr = block.instructions[i]
+      const live = block.info.references[i + 1]
+      if (instr.kind === "instr" && instr.op === "movq") {
+        for (const v of live) {
+          const source = nameOfRef(instr.args[0])
+          const target = nameOfRef(instr.args[1])
+          if (target && v !== source && v !== target) {
+            block.info.conflicts.addEdge(target, v)
+          }
+        }
+      }
+      else {
+        for (const d of this.liveWriteInstr(instr)) {
+          for (const v of live) {
+            if (v !== d) {
+              block.info.conflicts.addEdge(d, v)
+            }
+          }
+        }
+      }
+    }
+  }
+  uncoverLive(p: X86Program): X86Program {
+    const start = assertDefined(p.blocks.get("start"))
+    return {
+      info: p.info,
+      blocks: p.blocks.set("start", this.liveBlock(start, new Set(["rax", "rsp"]))),
+    }
+  }
+  liveBlock(block: Block, initial: Set<string>): Block {
+    let after = initial
+    const references = [after]
+    for (const i of block.instructions.toReversed()) {
+      let before: Set<string>
+      if (i.kind === "jmp") {
+        before = initial
+      } else {
+        const reads = this.liveReadInstr(i)
+        const writes = this.liveWriteInstr(i)
+        before = new Set([...Array.from(after).filter(live => !writes.includes(live)), ...reads])
+      }
+      references.push(before)
+      after = before
+    }
+    return {
+      ...block,
+      info: { ...block.info, references: references.toReversed() },
+    }
+  }
+  liveReadInstr(i: Instr): string[] {
+    switch (i.kind) {
+      case "instr":
+        switch (i.op) {
+          case "movq":
+          case "popq":
+          case "negq":
+            return [i.args[0]].map(nameOfRef).filter((s): s is string => s !== undefined)
+          case "addq":
+          case "subq":
+            return i.args.map(nameOfRef).filter((s): s is string => s !== undefined)
+          case "pushq":
+            return []
+        }
+      case "callq":
+      // TODO: callq reads from all caller-saved registers
+      case "ret":
+      case "jmp":
+        return []
+    }
+  }
+  liveWriteInstr(i: Instr): string[] {
+    switch (i.kind) {
+      case "instr":
+        switch (i.op) {
+          case "addq":
+          case "subq":
+          case "movq":
+            return [i.args[1]].map(nameOfRef).filter((s): s is string => s !== undefined)
+          case "pushq":
+          case "negq":
+            return [i.args[0]].map(nameOfRef).filter((s): s is string => s !== undefined)
+          case "popq":
+            return []
+        }
+      case "callq":
+      // TODO: callq writes to all callee-saved registers
+      case "ret":
+      case "jmp":
+        return []
+    }
+  }
   assignHomes(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
     return {
@@ -617,7 +723,7 @@ class X86Var {
   assignHomesBlock(block: Block): Block {
     return {
       ...block,
-      instructions: block.instructions.map(i => this.assignHomesInstr(block.info, i)),
+      instructions: block.instructions.map(i => this.assignHomesInstr(block.info.locals, i)),
     }
   }
   assignHomesInstr(info: Map<string, number>, i: Instr): Instr {
@@ -688,7 +794,7 @@ class X86Var {
   }
   interpBlock(e: Block): "jmp" | undefined {
     for (const i of e.instructions) {
-      const result = this.interpInstr(i, e.info)
+      const result = this.interpInstr(i, e.info.locals)
       if (result === "jmp") {
         return result
       } else if (result === "ret") {
@@ -697,7 +803,7 @@ class X86Var {
     }
   }
   interpInstr(e: Instr, env: Map<string, number>): "ret" | "jmp" | undefined {
-            const rsp = { kind: "reg", reg: "rsp" } as const
+    const rsp = { kind: "reg", reg: "rsp" } as const
     switch (e.kind) {
       case "instr": {
         switch (e.op) {
@@ -759,6 +865,17 @@ class X86Var {
     }
   }
 }
+function nameOfRef(r: Ref): string | undefined {
+  switch (r.kind) {
+    case "imm":
+      return undefined
+    case "var":
+      return r.name
+    case "reg":
+    case "deref":
+      return r.reg
+  }
+}
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
   return tmps.reduce((e, [name, exp]) => ({ kind: "let", name, exp, body: e }), init)
 }
@@ -800,8 +917,13 @@ function runAssignHomes(sexp: string) {
   const x = new X86Var()
   const p = l.explicateControl(l.removeComplexOperands(l.uniquifyProgram(l.parseProgram(sexp))))
   // console.log(c.emitProgram(p));
-  const xp = x.emitPreludeConclusion(x.patchInstructions(x.assignHomes(c.selectInstructions(p))))
-  console.log(x.emitProgram(xp))
+  const initial = x.uncoverLive(c.selectInstructions(p))
+  x.buildInterference(initial)
+  console.log(x.emitProgram(initial))
+  const xp = x.emitPreludeConclusion(x.patchInstructions(x.assignHomes(initial)))
+  // console.log(x.emitProgram(xp))
+  console.log(xp.blocks.get("start")!.info.references)
+  console.log(xp.blocks.get("start")!.info.conflicts)
   x.interpProgram(xp)
   return x.registers.get("rax")!
 }
@@ -824,3 +946,4 @@ testLvar("t", "(let (x 1) (let (x 2) (+ x x)))")
 testLvar("t", "(let (x 1) (+ (let (x 2) x) x))")
 testLvar("t", "(let (x 1) (+ (let (x 2) x) (let (x 3) x)))")
 testLvar("t", "(let (y 1) (+ (let (x 2) x) (let (x 3) (+ x y))))")
+testLvar("t", "(let (v 1) (let (w 42) (let (x (+ v 7)) (let (y x) (let (z (+ x w)) (+ z (- y)))))))")
