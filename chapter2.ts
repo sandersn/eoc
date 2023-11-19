@@ -18,11 +18,14 @@ type CProgram = {
   body: Map<string, Stmt>
 }
 /** for ASM */
+type Reg = { kind: "reg"; reg: string }
+type Deref = { kind: "deref"; reg: string; offset: number }
+type Imm = { kind: "imm"; int: number }
 type Ref =
   | Var
-  | { kind: "imm"; int: number }
-  | { kind: "reg"; reg: string }
-  | { kind: "deref"; reg: string; offset: number }
+  | Imm
+  | Reg
+  | Deref
 type Ops = "addq" | "subq" | "negq" | "movq" | "pushq" | "popq"
 type Instr =
   | { kind: "instr"; op: Ops; args: Ref[] }
@@ -36,7 +39,9 @@ type X86Program = {
 type Block = {
   kind: "block"
   info: {
+    // TODO: Probably not needed as output? (Only used in emitPreludeConclusion to determine stack size, but it's almost certainly wrong there)
     locals: Map<string, number>
+    homes: Map<string, Reg | Deref>
     references: Array<Set<string>>
     conflicts: DirectedGraph<string>
   }
@@ -75,6 +80,19 @@ class AList<K, V> {
     }
     assert(alist)
     return alist
+  }
+}
+function equalRef(r1: Ref, r2: Ref): boolean {
+  if (r1.kind !== r2.kind) return false
+  switch (r1.kind) {
+    case "imm":
+      return r1.int === (r2 as Imm).int
+    case "reg":
+      return r1.reg === (r2 as Reg).reg
+    case "var":
+      return r1.name === (r2 as Var).name
+    case "deref":
+      return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
   }
 }
 enum Token {
@@ -399,7 +417,7 @@ class CVar {
           "start",
           {
             kind: "block",
-            info: { locals: p.locals, references: [], conflicts: new DirectedGraph() },
+            info: { locals: p.locals, homes: new Map(), references: [], conflicts: new DirectedGraph() },
             instructions: this.selectInstructionsStmt(assertDefined(start)),
           },
         ],
@@ -540,10 +558,12 @@ class X86Var {
   emitPreludeConclusion(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
     start.instructions.push({ kind: "jmp", label: "conclusion" })
+    // TODO: Should probably be only the locals on the stack, omitting ones that are in registers
+    // This should be calculated from start.info.homes not .locals
     const stackSize = start.info.locals.size * 8 + 8
     p.blocks.set("main", {
       kind: "block",
-      info: { locals: new Map(), references: [], conflicts: new DirectedGraph() },
+      info: { locals: new Map(), homes: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         { kind: "instr", op: "pushq", args: [{ kind: "reg", reg: "rbp" }] },
         {
@@ -567,7 +587,7 @@ class X86Var {
     })
     p.blocks.set("conclusion", {
       kind: "block",
-      info: { locals: new Map(), references: [], conflicts: new DirectedGraph() },
+      info: { locals: new Map(), homes: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         {
           kind: "instr",
@@ -610,6 +630,9 @@ class X86Var {
             },
           ]
         }
+        else if (i.args.length === 2 && equalRef(i.args[0], i.args[1])) {
+          return []
+        }
       // fall through
       case "callq":
       case "ret":
@@ -632,8 +655,7 @@ class X86Var {
             block.info.conflicts.addEdge(target, v)
           }
         }
-      }
-      else {
+      } else {
         for (const d of this.liveWriteInstr(instr)) {
           for (const v of live) {
             if (v !== d) {
@@ -713,6 +735,91 @@ class X86Var {
         return []
     }
   }
+  allocateRegisters(p: X86Program): X86Program {
+    const b = assertDefined(p.blocks.get("start"))
+    // get vertices = variables + registers (I think there is a list NOT in the conflicts graph)
+    //   NOTE: conflicts doesn't include everything, but it does include everything that will be used in the algorithm, so it's good enough
+    // TODO: It also includes registers, which doesn't make sense; there's got to be a better starting point.
+    const vertices = new Set(b.info.conflicts.g.keys())
+    // initialise mapping of registers to numbers
+    const numbers = {
+      rcx: 0,
+      rdx: 1,
+      rsi: 2,
+      rdi: 3,
+      r8: 4,
+      r9: 5,
+      r10: 6,
+      rbx: 7, // callee save, if you reach these you have to push them in the prelude
+      r12: 8,
+      r13: 9,
+      r14: 10,
+      rax: -1,
+      rsp: -2,
+      rbp: -3,
+      r11: -4, // caller save (but I don't think you have to do anything; the caller will have to push them if they have used them, but they wouldn't)
+      r15: -5,
+    }
+    const registers = ["rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "rbx", "r12", "r13", "r14"]
+    registers[-1] = "rax"
+    registers[-2] = "rsp"
+    registers[-3] = "rbp"
+    registers[-4] = "r11"
+    registers[-5] = "r15"
+    // initialise mapping with variables, unset and registers, set to their mapping
+    //  (you can build the saturation list dynamically even though it's inefficient; it's just the assignments of the neighbours)
+    //  that's why the value type isn't a tuple
+    const colour: Map<string, number> = new Map()
+    for (const v of vertices) {
+      if (v in numbers) {
+        colour.set(v, numbers[v as keyof typeof numbers])
+        vertices.delete(v)
+      }
+    }
+    // run DSATUR what a name
+    while (vertices.size) {
+      const u = maxBy(vertices, v => (colour.get(v) === undefined ? saturation(b.info.conflicts.g.get(v)!) : 0))
+      if (!u) break
+      let c = 0
+      for (const n of Array.from(b.info.conflicts.g.get(u)!).map(n => colour.get(n)).toSorted()) {
+        if (n === undefined) break // quick exit; done with the already-assigned neighbours
+        if (n === c) c++
+      }
+      colour.set(u, c)
+      vertices.delete(u)
+    }
+    // compose mapping of variable/register->number and number->register/stack to get variable/register->register/stack
+    const homes: Map<string, Reg | Deref> = new Map()
+    for (const [name, c] of colour) {
+      const varreg = name
+      homes.set(varreg, c in registers ? { kind: "reg", reg: registers[c] } : { kind: "deref", reg: "rbp", offset: -8 * c })
+    }
+    b.info.homes = homes
+    // replace all variables with registers, similar to assignHomes
+    //   TODO: repurpose assignHomes/Ref to do this, but pass in homes instead of locals
+    //   Best way to do this is to rewrite assignHomes to use homes, and preprocess locals to do that, then test with existing tests
+    return this.assignHomes(p)
+
+    function maxBy<T>(it: Iterable<T>, f: (t: T) => number): T | undefined {
+      let best: T | undefined
+      let bestVal = Number.MIN_SAFE_INTEGER
+      for (const x of it) {
+        const val = f(x)
+        if (val > bestVal) {
+          bestVal = val
+          best = x
+        }
+      }
+      return best
+    }
+    function saturation(neighbours: Iterable<string>): number {
+      let n = 0
+      for (const neighbour of neighbours) {
+        if (colour.get(neighbour) !== undefined) n++
+      }
+      return n
+    }
+  }
   assignHomes(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
     return {
@@ -723,10 +830,10 @@ class X86Var {
   assignHomesBlock(block: Block): Block {
     return {
       ...block,
-      instructions: block.instructions.map(i => this.assignHomesInstr(block.info.locals, i)),
+      instructions: block.instructions.map(i => this.assignHomesInstr(block.info.homes, i)),
     }
   }
-  assignHomesInstr(info: Map<string, number>, i: Instr): Instr {
+  assignHomesInstr(info: Map<string, Deref | Reg>, i: Instr): Instr {
     switch (i.kind) {
       case "instr":
         return { ...i, args: i.args.map(a => this.assignHomesRef(info, a)) }
@@ -736,18 +843,14 @@ class X86Var {
         return i
     }
   }
-  assignHomesRef(info: Map<string, number>, a: Ref): Ref {
+  assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
     switch (a.kind) {
       case "imm":
       case "reg":
       case "deref":
         return a
       case "var":
-        return {
-          kind: "deref",
-          reg: "rbp",
-          offset: -8 * assertDefined(info.get(a.name)),
-        }
+        return assertDefined(info.get(a.name))
     }
   }
   emitProgram(xp: X86Program): string {
@@ -794,7 +897,7 @@ class X86Var {
   }
   interpBlock(e: Block): "jmp" | undefined {
     for (const i of e.instructions) {
-      const result = this.interpInstr(i, e.info.locals)
+      const result = this.interpInstr(i)
       if (result === "jmp") {
         return result
       } else if (result === "ret") {
@@ -802,7 +905,7 @@ class X86Var {
       }
     }
   }
-  interpInstr(e: Instr, env: Map<string, number>): "ret" | "jmp" | undefined {
+  interpInstr(e: Instr): "ret" | "jmp" | undefined {
     const rsp = { kind: "reg", reg: "rsp" } as const
     switch (e.kind) {
       case "instr": {
@@ -920,10 +1023,10 @@ function runAssignHomes(sexp: string) {
   const initial = x.uncoverLive(c.selectInstructions(p))
   x.buildInterference(initial)
   console.log(x.emitProgram(initial))
-  const xp = x.emitPreludeConclusion(x.patchInstructions(x.assignHomes(initial)))
-  // console.log(x.emitProgram(xp))
-  console.log(xp.blocks.get("start")!.info.references)
-  console.log(xp.blocks.get("start")!.info.conflicts)
+  const xp = x.emitPreludeConclusion(x.patchInstructions(x.allocateRegisters(initial)))
+  console.log(x.emitProgram(xp))
+  // console.log(xp.blocks.get("start")!.info.references)
+  // console.log(xp.blocks.get("start")!.info.conflicts)
   x.interpProgram(xp)
   return x.registers.get("rax")!
 }
