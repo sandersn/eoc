@@ -21,11 +21,7 @@ type CProgram = {
 type Reg = { kind: "reg"; reg: string }
 type Deref = { kind: "deref"; reg: string; offset: number }
 type Imm = { kind: "imm"; int: number }
-type Ref =
-  | Var
-  | Imm
-  | Reg
-  | Deref
+type Ref = Var | Imm | Reg | Deref
 type Ops = "addq" | "subq" | "negq" | "movq" | "pushq" | "popq"
 type Instr =
   | { kind: "instr"; op: Ops; args: Ref[] }
@@ -39,8 +35,6 @@ type X86Program = {
 type Block = {
   kind: "block"
   info: {
-    // TODO: Probably not needed as output? (Only used in emitPreludeConclusion to determine stack size, but it's almost certainly wrong there)
-    locals: Map<string, number>
     homes: Map<string, Reg | Deref>
     references: Array<Set<string>>
     conflicts: DirectedGraph<string>
@@ -550,6 +544,49 @@ class CVar {
     return this.emitStatement(assertDefined(p.body.get("start")))
   }
 }
+function frameStackSize(homes: Map<string, Reg | Deref>): number {
+  let stackLocations: Set<number> = new Set()
+  let calleeLocations: Set<string> = new Set()
+  for (const loc of homes.values()) {
+    if (loc.kind === "deref") {
+      stackLocations.add(loc.offset)
+    } else if (loc.reg in callee) {
+      calleeLocations.add(loc.reg)
+    }
+  }
+  // round a number up to the nearest 16 bytes
+  return Math.ceil((8 * stackLocations.size + 8 * calleeLocations.size) / 16) * 16 - 8 * calleeLocations.size
+}
+// callee save, if you reach these you have to push them in the prelude
+const callee = {
+  rbx: 7,
+  rsp: -2,
+  rbp: -3,
+  r12: 8,
+  r13: 9,
+  r14: 10,
+  r15: -5,
+}
+// initialise mapping of registers to numbers
+// TODO: Compose these from callee/caller-save register objects
+const numbers = {
+  ...callee,
+  rcx: 0,
+  rdx: 1,
+  rsi: 2,
+  rdi: 3,
+  r8: 4,
+  r9: 5,
+  r10: 6,
+  rax: -1,
+  r11: -4, // caller save (but I don't think you have to do anything; the caller will have to push them if they have used them, but they wouldn't)
+}
+const registers = ["rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "rbx", "r12", "r13", "r14"]
+registers[-1] = "rax"
+registers[-2] = "rsp"
+registers[-3] = "rbp"
+registers[-4] = "r11"
+registers[-5] = "r15"
 class X86Var {
   stack: number[] = []
   registers: Map<string, number> = new Map()
@@ -558,12 +595,11 @@ class X86Var {
   emitPreludeConclusion(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
     start.instructions.push({ kind: "jmp", label: "conclusion" })
-    // TODO: Should probably be only the locals on the stack, omitting ones that are in registers
-    // This should be calculated from start.info.homes not .locals
-    const stackSize = start.info.locals.size * 8 + 8
+    const stackSize = frameStackSize(start.info.homes)
+    console.log(stackSize)
     p.blocks.set("main", {
       kind: "block",
-      info: { locals: new Map(), homes: new Map(), references: [], conflicts: new DirectedGraph() },
+      info: { homes: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         { kind: "instr", op: "pushq", args: [{ kind: "reg", reg: "rbp" }] },
         {
@@ -587,7 +623,7 @@ class X86Var {
     })
     p.blocks.set("conclusion", {
       kind: "block",
-      info: { locals: new Map(), homes: new Map(), references: [], conflicts: new DirectedGraph() },
+      info: { homes: new Map(), references: [], conflicts: new DirectedGraph() },
       instructions: [
         {
           kind: "instr",
@@ -629,8 +665,7 @@ class X86Var {
               args: [{ kind: "reg", reg: "rax" }, i.args[1]],
             },
           ]
-        }
-        else if (i.args.length === 2 && equalRef(i.args[0], i.args[1])) {
+        } else if (i.args.length === 2 && equalRef(i.args[0], i.args[1])) {
           return []
         }
       // fall through
@@ -741,31 +776,6 @@ class X86Var {
     //   NOTE: conflicts doesn't include everything, but it does include everything that will be used in the algorithm, so it's good enough
     // TODO: It also includes registers, which doesn't make sense; there's got to be a better starting point.
     const vertices = new Set(b.info.conflicts.g.keys())
-    // initialise mapping of registers to numbers
-    const numbers = {
-      rcx: 0,
-      rdx: 1,
-      rsi: 2,
-      rdi: 3,
-      r8: 4,
-      r9: 5,
-      r10: 6,
-      rbx: 7, // callee save, if you reach these you have to push them in the prelude
-      r12: 8,
-      r13: 9,
-      r14: 10,
-      rax: -1,
-      rsp: -2,
-      rbp: -3,
-      r11: -4, // caller save (but I don't think you have to do anything; the caller will have to push them if they have used them, but they wouldn't)
-      r15: -5,
-    }
-    const registers = ["rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "rbx", "r12", "r13", "r14"]
-    registers[-1] = "rax"
-    registers[-2] = "rsp"
-    registers[-3] = "rbp"
-    registers[-4] = "r11"
-    registers[-5] = "r15"
     // initialise mapping with variables, unset and registers, set to their mapping
     //  (you can build the saturation list dynamically even though it's inefficient; it's just the assignments of the neighbours)
     //  that's why the value type isn't a tuple
@@ -781,7 +791,9 @@ class X86Var {
       const u = maxBy(vertices, v => (colour.get(v) === undefined ? saturation(b.info.conflicts.g.get(v)!) : 0))
       if (!u) break
       let c = 0
-      for (const n of Array.from(b.info.conflicts.g.get(u)!).map(n => colour.get(n)).toSorted()) {
+      for (const n of Array.from(b.info.conflicts.g.get(u)!)
+        .map(n => colour.get(n))
+        .toSorted()) {
         if (n === undefined) break // quick exit; done with the already-assigned neighbours
         if (n === c) c++
       }
@@ -790,9 +802,11 @@ class X86Var {
     }
     // compose mapping of variable/register->number and number->register/stack to get variable/register->register/stack
     const homes: Map<string, Reg | Deref> = new Map()
-    for (const [name, c] of colour) {
-      const varreg = name
-      homes.set(varreg, c in registers ? { kind: "reg", reg: registers[c] } : { kind: "deref", reg: "rbp", offset: -8 * c })
+    for (const [varreg, c] of colour) {
+      homes.set(
+        varreg,
+        c in registers ? { kind: "reg", reg: registers[c] } : { kind: "deref", reg: "rbp", offset: -8 * c }
+      )
     }
     b.info.homes = homes
     // replace all variables with registers, similar to assignHomes
