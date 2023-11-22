@@ -10,5 +10,5 @@
     "sourceMap": true,
     "skipLibCheck": true
   },
-  "files": ["core.ts", "graph.ts", "chapter2.ts"]
+  "files": ["structures.ts", "factory.ts", "core.ts", "parser.ts", "chapter2.ts"]
 }

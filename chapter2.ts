@@ -1,46 +1,27 @@
-import assert from "node:assert"
 import { assertDefined } from "./core.js"
-import { DirectedGraph } from "./graph.js"
-type Program = {
-  kind: "program"
-  info: AList<string, number>
-  body: Exp
-}
-/** for Language */
-type Var = { kind: "var"; name: string }
-type Prim = { kind: "prim"; op: string; args: Exp[] }
-type Exp = Prim | Var | { kind: "int"; val: number } | { kind: "let"; name: string; exp: Exp; body: Exp }
-/** for C */
-type Stmt = { kind: "assign"; var: Var; exp: Exp } | { kind: "seq"; statements: Stmt[] } | { kind: "return"; exp: Exp }
-type CProgram = {
-  kind: "cprogram"
-  locals: Map<string, number>
-  body: Map<string, Stmt>
-}
-/** for ASM */
-type Reg = { kind: "reg"; reg: string }
-type Deref = { kind: "deref"; reg: string; offset: number }
-type Imm = { kind: "imm"; int: number }
-type Ref = Var | Imm | Reg | Deref
-type Ops = "addq" | "subq" | "negq" | "movq" | "pushq" | "popq"
-type Instr =
-  | { kind: "instr"; op: Ops; args: Ref[] }
-  | { kind: "callq"; label: string; int: number }
-  | { kind: "ret" }
-  | { kind: "jmp"; label: string }
-type X86Program = {
-  info: Map<string, number>
-  blocks: Map<string, Block>
-}
-type Block = {
-  kind: "block"
-  info: {
-    homes: Map<string, Reg | Deref>
-    references: Array<Set<string>>
-    conflicts: DirectedGraph<string>
-  }
-  instructions: Instr[]
-}
+import { DirectedGraph, AList } from "./structures.js"
+import {
+  Exp,
+  Var,
+  Let,
+  Prim,
+  Ref,
+  Imm,
+  Reg,
+  Deref,
+  Stmt,
+  Program,
+  CProgram,
+  X86Program,
+  Instr,
+  Block,
+  Assign,
+  Seq,
+  Jmp,
+  Callq,
+  Ret,
+} from "./factory.js"
+import parse from "./parser.js"
 /** Read a number from stdin
  * use readline something something can't be bothered
  */
@@ -50,31 +31,6 @@ function read() {
 let counter = 0
 function gensym() {
   return "g" + counter++
-}
-class AList<K, V> {
-  constructor(public key: K, public value: V, public next?: AList<K, V>) {}
-  get(key: K): V | undefined {
-    if (this.key === key) return this.value
-    else if (this.next) return this.next.get(key)
-  }
-  set(key: K, value: V): void {
-    if (this.key === key) this.value = value
-    else if (this.next) this.next.set(key, value)
-    else throw new Error(`Key ${key} not found`)
-  }
-  toMap(m: Map<K, V>) {
-    m.set(this.key, this.value)
-    if (this.next) this.next.toMap(m)
-    return m
-  }
-  static fromMap<K, V>(m: Map<K, V>): AList<K, V> {
-    let alist: AList<K, V> | undefined = undefined
-    for (const [k, v] of m) {
-      alist = new AList(k, v, alist)
-    }
-    assert(alist)
-    return alist
-  }
 }
 function equalRef(r1: Ref, r2: Ref): boolean {
   if (r1.kind !== r2.kind) return false
@@ -87,62 +43,6 @@ function equalRef(r1: Ref, r2: Ref): boolean {
       return r1.name === (r2 as Var).name
     case "deref":
       return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
-  }
-}
-enum Token {
-  LParen,
-  RParen,
-  Let,
-  Identifier,
-  Number,
-  Plus,
-  Minus,
-  EOF,
-}
-function lex(s: string) {
-  let i = 0
-  let value: string = ""
-  return {
-    pos: () => i,
-    next: () => {
-      while (s[i] === " ") i++
-      switch (s[i]) {
-        case "(":
-          i++
-          return Token.LParen
-        case ")":
-          i++
-          return Token.RParen
-        case "+":
-          i++
-          value = "+"
-          return Token.Plus
-        case "-":
-          i++
-          value = "-"
-          return Token.Minus
-        case "l":
-          if (i + 2 < s.length && s[i + 1] === "e" && s[i + 2] === "t") {
-            i += 3
-            return Token.Let
-          }
-        default:
-          if (s[i] >= "0" && s[i] <= "9") {
-            let j = i
-            while (s[i] >= "0" && s[i] <= "9") i++
-            value = s.slice(j, i)
-            return Token.Number
-          }
-          if (s[i] >= "a" && s[i] <= "z") {
-            let j = i
-            while (s[i] >= "a" && s[i] <= "z") i++
-            value = s.slice(j, i)
-            return Token.Identifier
-          }
-      }
-      return Token.EOF
-    },
-    value: () => value,
   }
 }
 class LInt {
@@ -163,47 +63,7 @@ class LInt {
     return this.interpExp(p.body, new AList("!!!!!!", NaN, undefined))
   }
   parseProgram(sexp: string): Program {
-    const lexer = lex(sexp)
-    function parseExp(t: Token): Exp {
-      switch (t) {
-        case Token.Number:
-          return { kind: "int", val: +lexer.value() }
-        case Token.LParen: {
-          const head = lexer.next()
-          if (head === Token.Let) {
-            return parseLet()
-          } else {
-            const op = lexer.value()
-            const args = []
-            t = lexer.next()
-            while (t !== Token.RParen) {
-              args.push(parseExp(t))
-              t = lexer.next()
-            }
-            return { kind: "prim", op, args }
-          }
-        }
-        case Token.Identifier:
-          return { kind: "var", name: lexer.value() }
-        default:
-          throw new Error(`Unexpected token at ${lexer.pos()}: ${Token[t]} [${sexp.slice(lexer.pos())}]`)
-      }
-    }
-    function parseLet(): Exp {
-      assert(lexer.next() === Token.LParen)
-      assert(lexer.next() === Token.Identifier)
-      const name = lexer.value()
-      const exp = parseExp(lexer.next())
-      assert(lexer.next() === Token.RParen)
-      const body = parseExp(lexer.next())
-      assert(lexer.next() === Token.RParen)
-      return { kind: "let", name, exp, body }
-    }
-    return {
-      kind: "program",
-      info: new AList("!!!!!!!!!", NaN, undefined),
-      body: parseExp(lexer.next()),
-    }
+    return Program(new AList("!!!!!!!!!", NaN, undefined), parse(sexp))
   }
   emitProgram(p: Program): string {
     return this.emitExp(p.body)
@@ -223,7 +83,7 @@ class LInt {
 }
 class LVar extends LInt {
   removeComplexOperands(p: Program): Program {
-    return { ...p, body: this.removeComplexOperandsExp(p.body) }
+    return Program(p.info, this.removeComplexOperandsExp(p.body))
   }
   removeComplexOperandsExp(e: Exp): Exp {
     switch (e.kind) {
@@ -234,11 +94,11 @@ class LVar extends LInt {
         if (e.op === "read") return e
         if (e.args.length === 1) {
           const [tmp, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
-          return generateTmpLets({ ...e, args: [tmp] }, tmps)
+          return generateTmpLets(Prim(e.op, tmp), tmps)
         } else if (e.args.length === 2) {
           const [tmp1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
           const [tmp2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
-          return generateTmpLets({ ...e, args: [tmp1, tmp2] }, [...tmps1, ...tmps2])
+          return generateTmpLets(Prim(e.op, tmp1, tmp2), [...tmps1, ...tmps2])
         } else {
           throw new Error("Unexpected number of arguments")
         }
@@ -246,7 +106,7 @@ class LVar extends LInt {
       case "let": {
         const [tmpE, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
         const [tmpBody, tmpsBody] = this.removeComplexOperandsAtom(e.body, true)
-        return generateTmpLets({ ...e, exp: tmpE, body: generateTmpLets(tmpBody, tmpsBody) }, tmpsE)
+        return generateTmpLets(Let(e.name, tmpE, generateTmpLets(tmpBody, tmpsBody)), tmpsE)
       }
     }
   }
@@ -258,16 +118,16 @@ class LVar extends LInt {
       case "prim": {
         const tmp = gensym()
         if (e.op === "read") {
-          return [{ kind: "var", name: tmp }, [[tmp, e]]]
+          return [Var(tmp), [[tmp, e]]]
         }
         if (e.args.length === 1) {
           const [e1, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
-          return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1] }], ...tmps]]
+          return [Var(tmp), [[tmp, Prim(e.op, e1)], ...tmps]]
         } else if (e.args.length === 2) {
           const [e1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
           const [e2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
           const tmps = [...tmps1, ...tmps2]
-          return [{ kind: "var", name: tmp }, [[tmp, { ...e, args: [e1, e2] }], ...tmps]]
+          return [Var(tmp), [[tmp, Prim(e.op, e1, e2)], ...tmps]]
         } else {
           throw new Error("Unexpected number of arguments")
         }
@@ -276,24 +136,10 @@ class LVar extends LInt {
         const [e1, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
         const [body1, tmpsBody] = this.removeComplexOperandsAtom(e.body, isTail)
         if ((e1.kind === "var" || e1.kind === "int") && isTail) {
-          return [
-            generateTmpLets(
-              {
-                kind: "let",
-                name: e.name,
-                exp: e1,
-                body: generateTmpLets(body1, tmpsBody),
-              },
-              tmpsE
-            ),
-            [],
-          ]
+          return [generateTmpLets(Let(e.name, e1, generateTmpLets(body1, tmpsBody)), tmpsE), []]
         }
         const tmp = gensym()
-        return [
-          { kind: "var", name: tmp },
-          [[tmp, { ...e, exp: e1, body: generateTmpLets(body1, tmpsBody) }], ...tmpsE],
-        ]
+        return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
       }
     }
   }
@@ -310,28 +156,20 @@ class LVar extends LInt {
     }
   }
   uniquifyProgram(p: Program): Program {
-    return {
-      ...p,
-      body: this.uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)),
-    }
+    return Program(p.info, this.uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)))
   }
   uniquifyExp(e: Exp, env: AList<string, string>): Exp {
     switch (e.kind) {
       case "var":
-        return { ...e, name: assertDefined(env.get(e.name)) }
+        return Var(assertDefined(env.get(e.name)))
       case "int":
         return e
       case "prim":
-        return { ...e, args: e.args.map(a => this.uniquifyExp(a, env)) }
+        return Prim(e.op, ...e.args.map(a => this.uniquifyExp(a, env)))
       case "let": {
         let x = env.get(e.name) ? gensym() : e.name
         env = new AList(e.name, x, env)
-        return {
-          kind: "let",
-          name: x,
-          exp: this.uniquifyExp(e.exp, env),
-          body: this.uniquifyExp(e.body, env),
-        }
+        return Let(x, this.uniquifyExp(e.exp, env), this.uniquifyExp(e.body, env))
       }
     }
   }
@@ -340,7 +178,7 @@ class LVar extends LInt {
       case "var":
       case "int":
       case "prim":
-        return [{ kind: "assign", var: { kind: "var", name: x }, exp: e }, ...k]
+        return [Assign(Var(x), e), ...k]
       case "let": {
         return this.explicateAssign(e.exp, e.name, this.explicateAssign(e.body, x, k))
       }
@@ -356,15 +194,9 @@ class LVar extends LInt {
         const tail = this.explicateTail(e.body)
         switch (tail.kind) {
           case "seq":
-            return {
-              kind: "seq",
-              statements: this.explicateAssign(e.exp, e.name, tail.statements),
-            }
+            return Seq(this.explicateAssign(e.exp, e.name, tail.statements))
           case "return":
-            return {
-              kind: "seq",
-              statements: this.explicateAssign(e.exp, e.name, [tail]),
-            }
+            return Seq(this.explicateAssign(e.exp, e.name, [tail]))
           case "assign":
             throw new Error("Unexpected assign")
         }
@@ -374,11 +206,10 @@ class LVar extends LInt {
   explicateControl(p: Program): CProgram {
     const c = new CVar(this)
     const start = this.explicateTail(p.body)
-    return {
-      kind: "cprogram",
-      locals: c.typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
-      body: new Map([["start", start]]),
-    }
+    return CProgram(
+      c.typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
+      new Map([["start", start]])
+    )
   }
 }
 class CVar {
@@ -409,11 +240,10 @@ class CVar {
       blocks: new Map([
         [
           "start",
-          {
-            kind: "block",
-            info: { locals: p.locals, homes: new Map(), references: [], conflicts: new DirectedGraph() },
-            instructions: this.selectInstructionsStmt(assertDefined(start)),
-          },
+          Block(
+            { homes: new Map(), references: [], conflicts: new DirectedGraph() },
+            this.selectInstructionsStmt(assertDefined(start))
+          ),
         ],
       ]),
     }
@@ -423,15 +253,9 @@ class CVar {
       case "prim":
         return this.selectInstructionsPrim(e, to)
       case "int":
-        return [
-          {
-            kind: "instr",
-            op: "movq",
-            args: [{ kind: "imm", int: e.val }, to],
-          },
-        ]
+        return [Instr("movq", Imm(e.val), to)]
       case "var":
-        return [{ kind: "instr", op: "movq", args: [e, to] }]
+        return [Instr("movq", e, to)]
       case "let":
         throw new Error("Unexpected let on rhs of assignment.")
     }
@@ -439,53 +263,19 @@ class CVar {
   selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
     switch (e.op) {
       case "read":
-        return [
-          { kind: "callq", label: "read_int", int: 0 },
-          {
-            kind: "instr",
-            op: "movq",
-            args: [{ kind: "reg", reg: "rax" }, to],
-          },
-        ]
+        return [Callq("read_int", 0), Instr("movq", Reg("rax"), to)]
       case "+":
         return [
-          {
-            kind: "instr",
-            op: "movq",
-            args: [this.selectInstructionsAtom(e.args[0]), to],
-          },
-          {
-            kind: "instr",
-            op: "addq",
-            args: [this.selectInstructionsAtom(e.args[1]), to],
-          },
+          Instr("movq", this.selectInstructionsAtom(e.args[0]), to),
+          Instr("addq", this.selectInstructionsAtom(e.args[1]), to),
         ]
       case "-":
         if (e.args.length === 1) {
-          return [
-            {
-              kind: "instr",
-              op: "movq",
-              args: [this.selectInstructionsAtom(e.args[0]), to],
-            },
-            {
-              kind: "instr",
-              op: "negq",
-              args: [to],
-            },
-          ]
+          return [Instr("movq", this.selectInstructionsAtom(e.args[0]), to), Instr("negq", to)]
         } else {
           return [
-            {
-              kind: "instr",
-              op: "movq",
-              args: [this.selectInstructionsAtom(e.args[0]), to],
-            },
-            {
-              kind: "instr",
-              op: "subq",
-              args: [this.selectInstructionsAtom(e.args[1]), to],
-            },
+            Instr("movq", this.selectInstructionsAtom(e.args[0]), to),
+            Instr("subq", this.selectInstructionsAtom(e.args[1]), to),
           ]
         }
       default:
@@ -497,7 +287,7 @@ class CVar {
       case "assign":
         return this.selectInstructionsExp(s.exp, s.var)
       case "return":
-        return this.selectInstructionsExp(s.exp, { kind: "reg", reg: "rax" })
+        return this.selectInstructionsExp(s.exp, Reg("rax"))
       case "seq":
         return s.statements.flatMap(s => this.selectInstructionsStmt(s))
     }
@@ -505,7 +295,7 @@ class CVar {
   selectInstructionsAtom(e: Exp): Ref {
     switch (e.kind) {
       case "int":
-        return { kind: "imm", int: e.val }
+        return Imm(e.val)
       case "var":
         return e
       case "prim":
@@ -597,73 +387,45 @@ class X86Var {
     start.instructions.push({ kind: "jmp", label: "conclusion" })
     const stackSize = frameStackSize(start.info.homes)
     console.log(stackSize)
-    p.blocks.set("main", {
-      kind: "block",
-      info: { homes: new Map(), references: [], conflicts: new DirectedGraph() },
-      instructions: [
-        { kind: "instr", op: "pushq", args: [{ kind: "reg", reg: "rbp" }] },
-        {
-          kind: "instr",
-          op: "movq",
-          args: [
-            { kind: "reg", reg: "rsp" },
-            { kind: "reg", reg: "rbp" },
-          ],
-        },
-        {
-          kind: "instr",
-          op: "subq",
-          args: [
-            { kind: "imm", int: stackSize },
-            { kind: "reg", reg: "rsp" },
-          ],
-        },
-        { kind: "jmp", label: "start" },
-      ],
-    })
-    p.blocks.set("conclusion", {
-      kind: "block",
-      info: { homes: new Map(), references: [], conflicts: new DirectedGraph() },
-      instructions: [
-        {
-          kind: "instr",
-          op: "addq",
-          args: [
-            { kind: "imm", int: stackSize },
-            { kind: "reg", reg: "rsp" },
-          ],
-        },
-        { kind: "instr", op: "popq", args: [{ kind: "reg", reg: "rbp" }] },
-        { kind: "ret" },
-      ],
-    })
+    p.blocks.set(
+      "main",
+      Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, [
+        Instr("pushq", Reg("rbp")),
+        Instr("movq", Reg("rsp"), Reg("rbp")),
+        Instr("subq", Imm(stackSize), Reg("rsp")),
+        Jmp("start"),
+      ])
+    )
+    p.blocks.set(
+      "conclusion",
+      Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, [
+        Instr("addq", Imm(stackSize), Reg("rsp")),
+        Instr("popq", Reg("rbp")),
+        Ret(),
+      ])
+    )
     return p
   }
   patchInstructions(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
-    return {
-      info: p.info,
-      blocks: p.blocks.set("start", {
-        ...start,
-        instructions: start.instructions.flatMap(i => this.patchInstructionsInstr(i)),
-      }),
-    }
+    return X86Program(
+      p.info,
+      p.blocks.set(
+        "start",
+        Block(
+          start.info,
+          start.instructions.flatMap(i => this.patchInstructionsInstr(i))
+        )
+      )
+    )
   }
   patchInstructionsInstr(i: Instr): Instr[] {
     switch (i.kind) {
       case "instr":
         if (i.args.length === 2 && i.args[0].kind === "deref" && i.args[1].kind === "deref") {
           return [
-            {
-              kind: "instr",
-              op: "movq",
-              args: [i.args[0], { kind: "reg", reg: "rax" }],
-            },
-            {
-              kind: "instr",
-              op: i.op,
-              args: [{ kind: "reg", reg: "rax" }, i.args[1]],
-            },
+            Instr("movq", i.args[0], { kind: "reg", reg: "rax" }),
+            Instr(i.op, { kind: "reg", reg: "rax" }, i.args[1]),
           ]
         } else if (i.args.length === 2 && equalRef(i.args[0], i.args[1])) {
           return []
@@ -703,10 +465,7 @@ class X86Var {
   }
   uncoverLive(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
-    return {
-      info: p.info,
-      blocks: p.blocks.set("start", this.liveBlock(start, new Set(["rax", "rsp"]))),
-    }
+    return X86Program(p.info, p.blocks.set("start", this.liveBlock(start, new Set(["rax", "rsp"]))))
   }
   liveBlock(block: Block, initial: Set<string>): Block {
     let after = initial
@@ -723,10 +482,7 @@ class X86Var {
       references.push(before)
       after = before
     }
-    return {
-      ...block,
-      info: { ...block.info, references: references.toReversed() },
-    }
+    return Block({ ...block.info, references: references.toReversed() }, block.instructions)
   }
   liveReadInstr(i: Instr): string[] {
     switch (i.kind) {
@@ -803,10 +559,7 @@ class X86Var {
     // compose mapping of variable/register->number and number->register/stack to get variable/register->register/stack
     const homes: Map<string, Reg | Deref> = new Map()
     for (const [varreg, c] of colour) {
-      homes.set(
-        varreg,
-        c in registers ? { kind: "reg", reg: registers[c] } : { kind: "deref", reg: "rbp", offset: -8 * c }
-      )
+      homes.set(varreg, c in registers ? Reg(registers[c]) : Deref("rbp", -8 * c))
     }
     b.info.homes = homes
     // replace all variables with registers, similar to assignHomes
@@ -836,21 +589,18 @@ class X86Var {
   }
   assignHomes(p: X86Program): X86Program {
     const start = assertDefined(p.blocks.get("start"))
-    return {
-      info: p.info,
-      blocks: p.blocks.set("start", this.assignHomesBlock(start)),
-    }
+    return X86Program(p.info, p.blocks.set("start", this.assignHomesBlock(start)))
   }
   assignHomesBlock(block: Block): Block {
-    return {
-      ...block,
-      instructions: block.instructions.map(i => this.assignHomesInstr(block.info.homes, i)),
-    }
+    return Block(
+      block.info,
+      block.instructions.map(i => this.assignHomesInstr(block.info.homes, i))
+    )
   }
   assignHomesInstr(info: Map<string, Deref | Reg>, i: Instr): Instr {
     switch (i.kind) {
       case "instr":
-        return { ...i, args: i.args.map(a => this.assignHomesRef(info, a)) }
+        return Instr(i.op, ...i.args.map(a => this.assignHomesRef(info, a)))
       case "callq":
       case "ret":
       case "jmp":
@@ -994,7 +744,7 @@ function nameOfRef(r: Ref): string | undefined {
   }
 }
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
-  return tmps.reduce((e, [name, exp]) => ({ kind: "let", name, exp, body: e }), init)
+  return tmps.reduce((e, [name, exp]) => Let(name, exp, e), init)
 }
 function test(name: string, actual: number, expected: number) {
   if (actual !== expected) {
