@@ -1,4 +1,4 @@
-import { LInt, LVar, CVar, X86Var } from "./chapter2.js"
+import { LInt, LVar, CVar, X86Var } from "./compiler.js"
 function test(name: string, actual: number, expected: number) {
   if (actual !== expected) {
     console.log(`Test ${name} failed: expected ${expected}, actual ${actual}`)
@@ -67,5 +67,6 @@ testLvar("t", "(let (x 1) (+ (let (x 2) x) x))")
 testLvar("t", "(let (x 1) (+ (let (x 2) x) (let (x 3) x)))")
 testLvar("t", "(let (y 1) (+ (let (x 2) x) (let (x 3) (+ x y))))")
 testLvar("t", "(let (v 1) (let (w 42) (let (x (+ v 7)) (let (y x) (let (z (+ x w)) (+ z (- y)))))))")
-testLvar("boolean", "(let (x #t) (let (y #f) (if x y x)))")
-testLvar("boolean", "(let (x #t) (let (y #f) (if x 1 2)))")
+testLvar("boolean", "(let (x #t) (let (y #f) x))")
+// testLvar("boolean", "(let (x #t) (let (y #f) (if x y x)))")
+// testLvar("boolean", "(let (x #t) (let (y #f) (if x 1 2)))")

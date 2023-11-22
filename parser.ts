@@ -1,10 +1,12 @@
 import assert from "node:assert"
-import { Int, type Exp, Let, Var, Prim } from "./factory.js"
+import { Int, Bool, type Exp, Let, Var, Prim } from "./factory.js"
 enum Token {
   LParen,
   RParen,
   Let,
   Identifier,
+  True,
+  False,
   Number,
   Plus,
   Minus,
@@ -37,6 +39,12 @@ function lex(s: string) {
             i += 3
             return Token.Let
           }
+        case "#":
+          if (i + 1 < s.length && (s[i + 1] === "t" || s[i + 1] === "f")) {
+            const token = s[i + 1] === "t" ? Token.True : Token.False
+            i += 2
+            return token
+          }
         default:
           if (s[i] >= "0" && s[i] <= "9") {
             let j = i
@@ -62,13 +70,16 @@ export default function parse(sexp: string) {
     switch (t) {
       case Token.Number:
         return Int(+lexer.value())
+      case Token.True:
+      case Token.False:
+        return Bool(t === Token.True)
       case Token.LParen: {
         const head = lexer.next()
         if (head === Token.Let) {
           return parseLet()
         } else {
           const op = lexer.value()
-          const args = []
+          const args: Exp[] = []
           t = lexer.next()
           while (t !== Token.RParen) {
             args.push(parseExp(t))

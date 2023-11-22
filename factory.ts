@@ -3,8 +3,9 @@ import { AList, DirectedGraph } from "./structures.js"
 export type Var = { kind: "var"; name: string }
 export type Prim = { kind: "prim"; op: string; args: Exp[] }
 export type Int = { kind: "int"; val: number }
+export type Bool = { kind: "bool"; val: boolean }
 export type Let = { kind: "let"; name: string; exp: Exp; body: Exp }
-export type Exp = Prim | Var | Int | Let
+export type Exp = Prim | Var | Int | Bool | Let
 export type Program = {
   kind: "program"
   info: AList<string, number>
@@ -22,6 +23,9 @@ export function Var(name: string): Var {
 }
 export function Int(val: number): Int {
   return { kind: "int", val }
+}
+export function Bool(val: boolean): Bool {
+  return { kind: "bool", val }
 }
 export function Let(name: string, exp: Exp, body: Exp): Let {
   return { kind: "let", name, exp, body }

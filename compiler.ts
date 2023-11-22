@@ -50,6 +50,8 @@ export class LInt {
     switch (e.kind) {
       case "int":
         return e.val
+      case "bool":
+        return e.val ? 1 : 0
       case "prim":
         if (e.op === "read") return +read()
         if (e.op === "+") return this.interpExp(e.args[0], env) + this.interpExp(e.args[1], env)
@@ -72,6 +74,8 @@ export class LInt {
     switch (e.kind) {
       case "int":
         return `${e.val}`
+      case "bool":
+        return e.val ? "#t" : "#f"
       case "prim":
         return `(${e.op} ${e.args.map(a => this.emitExp(a)).join(" ")})`
       case "var":
@@ -89,6 +93,7 @@ export class LVar extends LInt {
     switch (e.kind) {
       case "var":
       case "int":
+      case "bool":
         return e
       case "prim": {
         if (e.op === "read") return e
@@ -114,6 +119,7 @@ export class LVar extends LInt {
     switch (e.kind) {
       case "var":
       case "int":
+      case "bool":
         return [e, []]
       case "prim": {
         const tmp = gensym()
@@ -163,6 +169,7 @@ export class LVar extends LInt {
       case "var":
         return Var(assertDefined(env.get(e.name)))
       case "int":
+      case "bool":
         return e
       case "prim":
         return Prim(e.op, ...e.args.map(a => this.uniquifyExp(a, env)))
@@ -177,6 +184,7 @@ export class LVar extends LInt {
     switch (e.kind) {
       case "var":
       case "int":
+      case "bool":
       case "prim":
         return [Assign(Var(x), e), ...k]
       case "let": {
@@ -188,6 +196,7 @@ export class LVar extends LInt {
     switch (e.kind) {
       case "var":
       case "int":
+      case "bool":
       case "prim":
         return { kind: "return", exp: e }
       case "let": {
@@ -254,6 +263,8 @@ export class CVar {
         return this.selectInstructionsPrim(e, to)
       case "int":
         return [Instr("movq", Imm(e.val), to)]
+      case "bool":
+        return [Instr("movq", Imm(e.val ? 1 : 0), to)]
       case "var":
         return [Instr("movq", e, to)]
       case "let":
@@ -296,6 +307,8 @@ export class CVar {
     switch (e.kind) {
       case "int":
         return Imm(e.val)
+      case "bool":
+        return Imm(e.val ? 1 : 0)
       case "var":
         return e
       case "prim":
