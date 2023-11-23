@@ -1,9 +1,8 @@
-import { assertDefined } from "./core.js"
+import { assertDefined, read } from "./core.js"
 import { DirectedGraph, AList } from "./structures.js"
 import {
   Exp,
   Var,
-  Let,
   Prim,
   Ref,
   Imm,
@@ -15,23 +14,11 @@ import {
   X86Program,
   Instr,
   Block,
-  Assign,
-  Seq,
   Jmp,
   Callq,
   Ret,
 } from "./factory.js"
-import parse from "./parser.js"
-/** Read a number from stdin
- * use readline something something can't be bothered
- */
-function read() {
-  return 0
-}
-let counter = 0
-function gensym() {
-  return "g" + counter++
-}
+import { interpExp, explicateTail, emitExp } from './language.js'
 function equalRef(r1: Ref, r2: Ref): boolean {
   if (r1.kind !== r2.kind) return false
   switch (r1.kind) {
@@ -45,182 +32,7 @@ function equalRef(r1: Ref, r2: Ref): boolean {
       return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
   }
 }
-export class LInt {
-  interpExp(e: Exp, env: AList<string, number>): number {
-    switch (e.kind) {
-      case "int":
-        return e.val
-      case "bool":
-        return e.val ? 1 : 0
-      case "prim":
-        if (e.op === "read") return +read()
-        if (e.op === "+") return this.interpExp(e.args[0], env) + this.interpExp(e.args[1], env)
-        if (e.op === "-" && e.args.length === 1) return -this.interpExp(e.args[0], env)
-        if (e.op === "-" && e.args.length === 2) return this.interpExp(e.args[0], env) - this.interpExp(e.args[1], env)
-      default:
-        return NaN
-    }
-  }
-  interpProgram(p: Program): number {
-    return this.interpExp(p.body, new AList("!!!!!!", NaN, undefined))
-  }
-  parseProgram(sexp: string): Program {
-    return Program(new AList("!!!!!!!!!", NaN, undefined), parse(sexp))
-  }
-  emitProgram(p: Program): string {
-    return this.emitExp(p.body)
-  }
-  emitExp(e: Exp): string {
-    switch (e.kind) {
-      case "int":
-        return `${e.val}`
-      case "bool":
-        return e.val ? "#t" : "#f"
-      case "prim":
-        return `(${e.op} ${e.args.map(a => this.emitExp(a)).join(" ")})`
-      case "var":
-        return e.name
-      case "let":
-        return `(let (${e.name} ${this.emitExp(e.exp)}) ${this.emitExp(e.body)})`
-    }
-  }
-}
-export class LVar extends LInt {
-  removeComplexOperands(p: Program): Program {
-    return Program(p.info, this.removeComplexOperandsExp(p.body))
-  }
-  removeComplexOperandsExp(e: Exp): Exp {
-    switch (e.kind) {
-      case "var":
-      case "int":
-      case "bool":
-        return e
-      case "prim": {
-        if (e.op === "read") return e
-        if (e.args.length === 1) {
-          const [tmp, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
-          return generateTmpLets(Prim(e.op, tmp), tmps)
-        } else if (e.args.length === 2) {
-          const [tmp1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
-          const [tmp2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
-          return generateTmpLets(Prim(e.op, tmp1, tmp2), [...tmps1, ...tmps2])
-        } else {
-          throw new Error("Unexpected number of arguments")
-        }
-      }
-      case "let": {
-        const [tmpE, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
-        const [tmpBody, tmpsBody] = this.removeComplexOperandsAtom(e.body, true)
-        return generateTmpLets(Let(e.name, tmpE, generateTmpLets(tmpBody, tmpsBody)), tmpsE)
-      }
-    }
-  }
-  removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
-    switch (e.kind) {
-      case "var":
-      case "int":
-      case "bool":
-        return [e, []]
-      case "prim": {
-        const tmp = gensym()
-        if (e.op === "read") {
-          return [Var(tmp), [[tmp, e]]]
-        }
-        if (e.args.length === 1) {
-          const [e1, tmps] = this.removeComplexOperandsAtom(e.args[0], false)
-          return [Var(tmp), [[tmp, Prim(e.op, e1)], ...tmps]]
-        } else if (e.args.length === 2) {
-          const [e1, tmps1] = this.removeComplexOperandsAtom(e.args[0], false)
-          const [e2, tmps2] = this.removeComplexOperandsAtom(e.args[1], false)
-          const tmps = [...tmps1, ...tmps2]
-          return [Var(tmp), [[tmp, Prim(e.op, e1, e2)], ...tmps]]
-        } else {
-          throw new Error("Unexpected number of arguments")
-        }
-      }
-      case "let": {
-        const [e1, tmpsE] = this.removeComplexOperandsAtom(e.exp, false)
-        const [body1, tmpsBody] = this.removeComplexOperandsAtom(e.body, isTail)
-        if ((e1.kind === "var" || e1.kind === "int") && isTail) {
-          return [generateTmpLets(Let(e.name, e1, generateTmpLets(body1, tmpsBody)), tmpsE), []]
-        }
-        const tmp = gensym()
-        return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
-      }
-    }
-  }
 
-  override interpExp(e: Exp, env: AList<string, number>): number {
-    switch (e.kind) {
-      case "var": {
-        return assertDefined(env.get(e.name))
-      }
-      case "let":
-        return this.interpExp(e.body, new AList(e.name, this.interpExp(e.exp, env), env))
-      default:
-        return super.interpExp(e, env)
-    }
-  }
-  uniquifyProgram(p: Program): Program {
-    return Program(p.info, this.uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)))
-  }
-  uniquifyExp(e: Exp, env: AList<string, string>): Exp {
-    switch (e.kind) {
-      case "var":
-        return Var(assertDefined(env.get(e.name)))
-      case "int":
-      case "bool":
-        return e
-      case "prim":
-        return Prim(e.op, ...e.args.map(a => this.uniquifyExp(a, env)))
-      case "let": {
-        let x = env.get(e.name) ? gensym() : e.name
-        env = new AList(e.name, x, env)
-        return Let(x, this.uniquifyExp(e.exp, env), this.uniquifyExp(e.body, env))
-      }
-    }
-  }
-  explicateAssign(e: Exp, x: string, k: Stmt[]): Stmt[] {
-    switch (e.kind) {
-      case "var":
-      case "int":
-      case "bool":
-      case "prim":
-        return [Assign(Var(x), e), ...k]
-      case "let": {
-        return this.explicateAssign(e.exp, e.name, this.explicateAssign(e.body, x, k))
-      }
-    }
-  }
-  explicateTail(e: Exp): Stmt {
-    switch (e.kind) {
-      case "var":
-      case "int":
-      case "bool":
-      case "prim":
-        return { kind: "return", exp: e }
-      case "let": {
-        const tail = this.explicateTail(e.body)
-        switch (tail.kind) {
-          case "seq":
-            return Seq(this.explicateAssign(e.exp, e.name, tail.statements))
-          case "return":
-            return Seq(this.explicateAssign(e.exp, e.name, [tail]))
-          case "assign":
-            throw new Error("Unexpected assign")
-        }
-      }
-    }
-  }
-  explicateControl(p: Program): CProgram {
-    const c = new CVar(this)
-    const start = this.explicateTail(p.body)
-    return CProgram(
-      c.typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
-      new Map([["start", start]])
-    )
-  }
-}
 export class CVar {
   /** Doesn't actually type check currently, but binds name to index */
   typeCheck(s: Stmt): Map<string, number> {
@@ -316,18 +128,17 @@ export class CVar {
         throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
     }
   }
-  constructor(public readonly lvar: LVar) {}
   interpStatement(e: Stmt, env: Map<string, number>): number {
     switch (e.kind) {
       case "assign": {
-        const v = this.lvar.interpExp(e.exp, AList.fromMap(env))
+        const v = interpExp(e.exp, AList.fromMap(env))
         env.set(e.var.name, v)
         return v
       }
       case "seq":
         return e.statements.reduce((_, s) => this.interpStatement(s, env), 0)
       case "return":
-        return this.lvar.interpExp(e.exp, AList.fromMap(env))
+        return interpExp(e.exp, AList.fromMap(env))
     }
   }
   interpProgram(p: CProgram): number {
@@ -336,15 +147,22 @@ export class CVar {
   emitStatement(e: Stmt): string {
     switch (e.kind) {
       case "assign":
-        return `${e.var.name} = ${this.lvar.emitExp(e.exp)};\n`
+        return `${e.var.name} = ${emitExp(e.exp)};\n`
       case "return":
-        return `return ${this.lvar.emitExp(e.exp)};\n`
+        return `return ${emitExp(e.exp)};\n`
       case "seq":
         return e.statements.map(s => this.emitStatement(s)).join("")
     }
   }
   emitProgram(p: CProgram): string {
     return this.emitStatement(assertDefined(p.body.get("start")))
+  }
+  explicateControl(p: Program): CProgram {
+    const start = explicateTail(p.body)
+    return CProgram(
+      this.typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
+      new Map([["start", start]])
+    )
   }
 }
 function frameStackSize(homes: Map<string, Reg | Deref>): number {
@@ -755,7 +573,4 @@ function nameOfRef(r: Ref): string | undefined {
     case "deref":
       return r.reg
   }
-}
-function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
-  return tmps.reduce((e, [name, exp]) => Let(name, exp, e), init)
 }
