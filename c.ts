@@ -2,8 +2,8 @@ import { assertDefined } from "./core.js"
 import { Exp, Prim, Ref, Imm, Reg, Stmt, Program, CProgram, X86Program, Instr, Block, Callq } from "./factory.js"
 import { interpExp, explicateTail, emitExp } from "./language.js"
 import { DirectedGraph, AList } from "./structures.js"
-/** Doesn't actually type check currently, but binds name to index */
-function typeCheck(s: Stmt): Map<string, number> {
+/** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
+function bind(s: Stmt): Map<string, number> {
   const env: Map<string, number> = new Map()
   let i = 1
   function worker(s: Stmt): void {
@@ -130,7 +130,7 @@ export function emitProgram(p: CProgram): string {
 export function explicateControl(p: Program): CProgram {
   const start = explicateTail(p.body)
   return CProgram(
-    typeCheck(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
+    bind(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
     new Map([["start", start]])
   )
 }

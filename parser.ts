@@ -10,11 +10,27 @@ enum Token {
   Number,
   Plus,
   Minus,
+  Lt,
+  Gt,
+  Gte,
+  Lte,
+  EqEq,
   EOF,
 }
 function lex(s: string) {
   let i = 0
   let value: string = ""
+  function nextChar(next: string, token: Token, tokenValue: string, backup: Token, backupValue: string): Token {
+    assert(next.length === 1)
+    if (i + 1 < s.length && s[i + 1] === next) {
+      i += 2
+      value = tokenValue
+      return token
+    }
+    i++
+    value = backupValue
+    return backup
+  }
   return {
     pos: () => i,
     next: () => {
@@ -39,12 +55,20 @@ function lex(s: string) {
             i += 3
             return Token.Let
           }
+        case "<":
+          return nextChar("=", Token.Lte, '<=', Token.Lt, '<')
+        case ">":
+          return nextChar("=", Token.Gte, '>=', Token.Gt, '>')
+        case "=":
+          // TODO: fallback should be Eq once assignment is supported
+          return nextChar("=", Token.EqEq, '==', Token.EOF, '=')
         case "#":
           if (i + 1 < s.length && (s[i + 1] === "t" || s[i + 1] === "f")) {
             const token = s[i + 1] === "t" ? Token.True : Token.False
             i += 2
             return token
           }
+        // Fall through:
         default:
           if (s[i] >= "0" && s[i] <= "9") {
             let j = i
