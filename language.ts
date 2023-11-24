@@ -1,5 +1,5 @@
 import { assertDefined } from "./core.js"
-import { Exp, Prim, Var, Program, Let, Stmt, Assign, Seq, Return } from "./factory.js"
+import { Exp, Prim, Var, Program, Let, Stmt, Assign, Seq, Return, If } from "./factory.js"
 import parse from "./parser.js"
 import { AList } from "./structures.js"
 import { read } from "./core.js"
@@ -23,13 +23,15 @@ export function interpExp(e: Exp, env: AList<string, number>): number {
       if (e.op === "+") return interpExp(e.args[0], env) + interpExp(e.args[1], env)
       if (e.op === "-" && e.args.length === 1) return -interpExp(e.args[0], env)
       if (e.op === "-" && e.args.length === 2) return interpExp(e.args[0], env) - interpExp(e.args[1], env)
-    default:
       return NaN
+    case "if":
+      return interpExp(e.cond, env) === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
   }
 }
 export function interpProgram(p: Program): number {
   return interpExp(p.body, new AList("!!!!!!", NaN, undefined))
 }
+
 export function parseProgram(sexp: string): Program {
   return Program(new AList("!!!!!!!!!", NaN, undefined), parse(sexp))
 }
@@ -48,13 +50,36 @@ export function emitExp(e: Exp): string {
       return e.name
     case "let":
       return `(let (${e.name} ${emitExp(e.exp)}) ${emitExp(e.body)})`
+    case "if":
+      return `[if ${emitExp(e.cond)} ${emitExp(e.then)} ${emitExp(e.else)}]`
   }
 }
+/** Convert primitive nodes to ifs and calls as needed */
+export function reparsePrimitives(p: Program): Program {
+  return Program(p.info, reparsePrimitivesExp(p.body))
+}
+function reparsePrimitivesExp(e: Exp): Exp {
+  switch (e.kind) {
+    case "prim":
+      if (e.op === "if") return If(e.args[0], e.args[1], e.args[2])
+    // TODO: Later, if e.op not in primitive list, then create a Call
+    case "var":
+    case "int":
+    case "bool":
+      return e
+    case "let":
+      return Let(e.name, reparsePrimitivesExp(e.exp), reparsePrimitivesExp(e.body))
+    case "if":
+      return If(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.then), reparsePrimitivesExp(e.else))
+  }
+}
+
 export function removeComplexOperands(p: Program): Program {
   return Program(p.info, removeComplexOperandsExp(p.body))
 }
 function removeComplexOperandsExp(e: Exp): Exp {
   switch (e.kind) {
+    case "if": // TODO
     case "var":
     case "int":
     case "bool":
@@ -81,6 +106,7 @@ function removeComplexOperandsExp(e: Exp): Exp {
 }
 function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
   switch (e.kind) {
+    case "if": // TODO
     case "var":
     case "int":
     case "bool":
@@ -126,6 +152,8 @@ function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
       return e
     case "prim":
       return Prim(e.op, ...e.args.map(a => uniquifyExp(a, env)))
+    case "if":
+      return If(uniquifyExp(e.cond, env), uniquifyExp(e.then, env), uniquifyExp(e.else, env))
     case "let": {
       let x = env.get(e.name) ? gensym() : e.name
       env = new AList(e.name, x, env)
@@ -135,6 +163,7 @@ function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
 }
 function explicateAssign(e: Exp, x: string, k: Stmt[]): Stmt[] {
   switch (e.kind) {
+    case "if": // TODO this needs to be much more complicated
     case "var":
     case "int":
     case "bool":
@@ -147,6 +176,7 @@ function explicateAssign(e: Exp, x: string, k: Stmt[]): Stmt[] {
 }
 export function explicateTail(e: Exp): Stmt {
   switch (e.kind) {
+    case "if": // TODO: this needs to be much more complicated
     case "var":
     case "int":
     case "bool":

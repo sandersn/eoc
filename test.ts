@@ -1,5 +1,5 @@
 import * as l from "./language.js"
-import { uniquifyProgram, parseProgram, removeComplexOperands } from "./language.js"
+import { uniquifyProgram, parseProgram, removeComplexOperands, reparsePrimitives } from "./language.js"
 import * as c from "./c.js"
 import { explicateControl, selectInstructions } from "./c.js"
 import * as x from "./x86.js"
@@ -10,7 +10,7 @@ function test(name: string, actual: number, expected: number) {
   }
 }
 function runLvar(sexp: string) {
-  return l.interpProgram(parseProgram(sexp))
+  return l.interpProgram(reparsePrimitives(parseProgram(sexp)))
 }
 function runUniquifyLvar(sexp: string) {
   const p = uniquifyProgram(parseProgram(sexp))
@@ -28,15 +28,16 @@ function runExplicateControl(sexp: string) {
   return c.interpProgram(p)
 }
 function runAssignHomes(sexp: string) {
-  const p = explicateControl(removeComplexOperands(uniquifyProgram(parseProgram(sexp))))
-  // console.log(c.emitProgram(p));
-  const initial = uncoverLive(selectInstructions(p))
-  buildInterference(initial)
-  const xp = emitPreludeConclusion(patchInstructions(allocateRegisters(initial)))
+  const p = explicateControl(removeComplexOperands(uniquifyProgram(reparsePrimitives(parseProgram(sexp)))))
+  console.log(c.emitProgram(p));
+  return c.interpProgram(p)
+  // const initial = uncoverLive(selectInstructions(p))
+  // buildInterference(initial)
+  // const xp = emitPreludeConclusion(patchInstructions(allocateRegisters(initial)))
   // console.log(x.emitProgram(xp))
   // console.log(xp.blocks.get("start")!.info.references)
   // console.log(xp.blocks.get("start")!.info.conflicts)
-  return x.interpProgram(xp)
+  // return x.interpProgram(xp)
 }
 function testLvar(name: string, sexp: string) {
   const expected = runLvar(sexp)
@@ -59,5 +60,5 @@ testLvar("t", "(let (x 1) (+ (let (x 2) x) (let (x 3) x)))")
 testLvar("t", "(let (y 1) (+ (let (x 2) x) (let (x 3) (+ x y))))")
 testLvar("t", "(let (v 1) (let (w 42) (let (x (+ v 7)) (let (y x) (let (z (+ x w)) (+ z (- y)))))))")
 testLvar("boolean", "(let (x #t) (let (y #f) x))")
-// testLvar("boolean", "(let (x #t) (let (y #f) (if x y x)))")
-// testLvar("boolean", "(let (x #t) (let (y #f) (if x 1 2)))")
+testLvar("boolean", "(let (x #t) (let (y #f) (if x y x)))")
+testLvar("boolean", "(let (x #t) (let (y #f) (if x 1 2)))")

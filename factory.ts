@@ -2,10 +2,11 @@ import { AList, DirectedGraph } from "./structures.js"
 /** for Language */
 export type Var = { kind: "var"; name: string }
 export type Prim = { kind: "prim"; op: string; args: Exp[] }
+export type If = { kind: "if", cond: Exp, then: Exp, else: Exp }
 export type Int = { kind: "int"; val: number }
 export type Bool = { kind: "bool"; val: boolean }
 export type Let = { kind: "let"; name: string; exp: Exp; body: Exp }
-export type Exp = Prim | Var | Int | Bool | Let
+export type Exp = Prim | Var | Int | Bool | Let | If
 export type Program = {
   kind: "program"
   info: AList<string, number>
@@ -29,6 +30,9 @@ export function Bool(val: boolean): Bool {
 }
 export function Let(name: string, exp: Exp, body: Exp): Let {
   return { kind: "let", name, exp, body }
+}
+export function If(cond: Exp, then: Exp, else_: Exp): If {
+  return { kind: "if", cond, then, else: else_ }
 }
 
 /** for C */

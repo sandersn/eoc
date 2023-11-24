@@ -47,8 +47,9 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
       return [Instr("movq", Imm(e.val ? 1 : 0), to)]
     case "var":
       return [Instr("movq", e, to)]
+    case "if":
     case "let":
-      throw new Error("Unexpected let on rhs of assignment.")
+      throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
   }
 }
 function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
@@ -92,6 +93,7 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "var":
       return e
     case "prim":
+    case "if":
     case "let":
       throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
   }
