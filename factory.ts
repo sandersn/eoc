@@ -36,10 +36,14 @@ export function If(cond: Exp, then: Exp, else_: Exp): If {
 }
 
 /** for C */
+type Goto = { kind: "goto", label: string }
 export type Stmt =
   | { kind: "assign"; var: Var; exp: Exp }
   | { kind: "seq"; statements: Stmt[] }
   | { kind: "return"; exp: Exp }
+  | Goto
+  // TODO: Technically, cond is a Prim with op: "==" | ">" | "<" | ">=" | "<=" but I don't think it's worth it to make a new type for this.
+  | { kind: "if", cond: Prim, then: Goto, else: Goto }
 export type CProgram = {
   kind: "cprogram"
   locals: Map<string, number>
@@ -53,6 +57,12 @@ export function Seq(statements: Stmt[]): Stmt {
 }
 export function Return(exp: Exp): Stmt {
   return { kind: "return", exp }
+}
+export function Goto(label: string): Stmt {
+  return { kind: "goto", label }
+}
+export function IfStmt(cond: Prim, then: Goto, else_: Goto): Stmt {
+  return { kind: "if", cond, then, else: else_ }
 }
 export function CProgram(locals: Map<string, number>, body: Map<string, Stmt>): CProgram {
   return { kind: "cprogram", locals, body }

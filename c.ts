@@ -80,6 +80,10 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
       return selectInstructionsExp(s.exp, s.var)
     case "return":
       return selectInstructionsExp(s.exp, Reg("rax"))
+    case "goto":
+      throw new Error("Don't know how to select instructions for goto")
+    case "if":
+      throw new Error("Don't know how to select instructions for if")
     case "seq":
       return s.statements.flatMap(s => selectInstructionsStmt(s))
   }
@@ -98,21 +102,26 @@ function selectInstructionsAtom(e: Exp): Ref {
       throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
   }
 }
-function interpStatement(e: Stmt, env: Map<string, number>): number {
-  switch (e.kind) {
-    case "assign": {
-      const v = interpExp(e.exp, AList.fromMap(env))
-      env.set(e.var.name, v)
-      return v
-    }
-    case "seq":
-      return e.statements.reduce((_, s) => interpStatement(s, env), 0)
-    case "return":
-      return interpExp(e.exp, AList.fromMap(env))
-  }
-}
 export function interpProgram(p: CProgram): number {
-  return interpStatement(assertDefined(p.body.get("start")), p.locals)
+  return interpStatement(assertDefined(p.body.get("start")))
+  function interpStatement(e: Stmt): number {
+    const env2 = AList.fromMap(p.locals)
+    switch (e.kind) {
+      case "assign": {
+        const v = interpExp(e.exp, env2)
+        p.locals.set(e.var.name, v)
+        return v
+      }
+      case "seq":
+        return e.statements.reduce((_, s) => interpStatement(s), 0)
+      case "if":
+        return interpStatement(interpExp(e.cond, env2) ? e.then : e.else)
+      case "goto":
+        return interpStatement(assertDefined(p.body.get(e.label)))
+      case "return":
+        return interpExp(e.exp, env2)
+    }
+  }
 }
 function emitStatement(e: Stmt): string {
   switch (e.kind) {
@@ -122,6 +131,10 @@ function emitStatement(e: Stmt): string {
       return `return ${emitExp(e.exp)};\n`
     case "seq":
       return e.statements.map(s => emitStatement(s)).join("")
+    case "goto":
+      return `goto ${e.label};\n`
+    case "if":
+      return `if (${emitExp(e.cond)}) ${emitStatement(e.then)} else ${emitStatement(e.else)}\n`
   }
 }
 export function emitProgram(p: CProgram): string {

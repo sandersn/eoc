@@ -1,5 +1,5 @@
 import { assertDefined, zip, unzip } from "./core.js"
-import { Exp, Prim, Var, Program, Let, Stmt, Assign, Seq, Return, If } from "./factory.js"
+import { Exp, Prim, Var, Program, Let, Stmt, Assign, Seq, Return, If, Bool } from "./factory.js"
 import parse from "./parser.js"
 import { AList } from "./structures.js"
 import { read } from "./core.js"
@@ -86,13 +86,14 @@ function typeCheckExp(e: Exp, env: AList<string, Type>): [Exp, Type] {
     case "bool":
       return [e, boolType]
     case "prim": {
-      if (e.op === "==") { // == is generic
+      if (e.op === "==") {
+        // == is generic
         const [e1, t1] = typeCheckExp(e.args[0], env)
         const [e2, t2] = typeCheckExp(e.args[1], env)
         assertTypeEqual(t1, t2, e)
         return [Prim(e.op, e1, e2), boolType]
-      }
-      else if (e.op === "-" && e.args.length === 1) { // - is overloaded
+      } else if (e.op === "-" && e.args.length === 1) {
+        // - is overloaded
         const [e1, t1] = typeCheckExp(e.args[0], env)
         assertTypeEqual(t1, intType, e)
         return [Prim(e.op, e1), intType]
@@ -173,6 +174,11 @@ function reparsePrimitivesExp(e: Exp): Exp {
     case "prim":
       if (e.op === "if")
         return If(reparsePrimitivesExp(e.args[0]), reparsePrimitivesExp(e.args[1]), reparsePrimitivesExp(e.args[2]))
+      else if (e.op === "and") {
+        return If(reparsePrimitivesExp(e.args[0]), reparsePrimitivesExp(e.args[1]), Bool(false))
+      } else if (e.op === "or") {
+        return If(reparsePrimitivesExp(e.args[0]), Bool(true), reparsePrimitivesExp(e.args[1]))
+      }
       return Prim(e.op, ...e.args.map(reparsePrimitivesExp))
     // TODO: Later, if e.op not in primitive list, then create a Call
     case "var":
@@ -191,7 +197,6 @@ export function removeComplexOperands(p: Program): Program {
 }
 function removeComplexOperandsExp(e: Exp): Exp {
   switch (e.kind) {
-    case "if": // TODO
     case "var":
     case "int":
     case "bool":
@@ -209,6 +214,8 @@ function removeComplexOperandsExp(e: Exp): Exp {
         throw new Error("Unexpected number of arguments")
       }
     }
+    case "if":
+      return If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else))
     case "let": {
       const [tmpE, tmpsE] = removeComplexOperandsAtom(e.exp, false)
       const [tmpBody, tmpsBody] = removeComplexOperandsAtom(e.body, true)
@@ -218,7 +225,6 @@ function removeComplexOperandsExp(e: Exp): Exp {
 }
 function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
   switch (e.kind) {
-    case "if": // TODO
     case "var":
     case "int":
     case "bool":
@@ -240,6 +246,10 @@ function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string
         throw new Error("Unexpected number of arguments")
       }
     }
+    case "if":
+      // TODO not at all sure this is right -- at least I should recur with -Exp
+      const tmp = gensym()
+      return [Var(tmp), [[tmp, If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else))]]]
     case "let": {
       const [e1, tmpsE] = removeComplexOperandsAtom(e.exp, false)
       const [body1, tmpsBody] = removeComplexOperandsAtom(e.body, isTail)
@@ -301,6 +311,10 @@ export function explicateTail(e: Exp): Stmt {
           return Seq(explicateAssign(e.exp, e.name, tail.statements))
         case "return":
           return Seq(explicateAssign(e.exp, e.name, [tail]))
+        case "goto":
+          throw new Error("don't know how to handle goto")
+        case "if":
+          throw new Error("don't know how to handle if")
         case "assign":
           throw new Error("Unexpected assign")
       }
