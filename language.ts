@@ -204,11 +204,11 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "prim": {
       if (e.op === "read") return e
       if (e.args.length === 1) {
-        const [tmp, tmps] = removeComplexOperandsAtom(e.args[0], false)
+        const [tmp, tmps] = removeComplexOperandsAtom(e.args[0])
         return generateTmpLets(Prim(e.op, tmp), tmps)
       } else if (e.args.length === 2) {
-        const [tmp1, tmps1] = removeComplexOperandsAtom(e.args[0], false)
-        const [tmp2, tmps2] = removeComplexOperandsAtom(e.args[1], false)
+        const [tmp1, tmps1] = removeComplexOperandsAtom(e.args[0])
+        const [tmp2, tmps2] = removeComplexOperandsAtom(e.args[1])
         return generateTmpLets(Prim(e.op, tmp1, tmp2), [...tmps1, ...tmps2])
       } else {
         throw new Error("Unexpected number of arguments")
@@ -217,13 +217,11 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "if":
       return If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else))
     case "let": {
-      const [tmpE, tmpsE] = removeComplexOperandsAtom(e.exp, false)
-      const [tmpBody, tmpsBody] = removeComplexOperandsAtom(e.body, true)
-      return generateTmpLets(Let(e.name, tmpE, generateTmpLets(tmpBody, tmpsBody)), tmpsE)
+      return Let(e.name, removeComplexOperandsExp(e.exp), removeComplexOperandsExp(e.body))
     }
   }
 }
-function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string, Exp]>] {
+function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
   switch (e.kind) {
     case "var":
     case "int":
@@ -235,11 +233,11 @@ function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string
         return [Var(tmp), [[tmp, e]]]
       }
       if (e.args.length === 1) {
-        const [e1, tmps] = removeComplexOperandsAtom(e.args[0], false)
+        const [e1, tmps] = removeComplexOperandsAtom(e.args[0])
         return [Var(tmp), [[tmp, Prim(e.op, e1)], ...tmps]]
       } else if (e.args.length === 2) {
-        const [e1, tmps1] = removeComplexOperandsAtom(e.args[0], false)
-        const [e2, tmps2] = removeComplexOperandsAtom(e.args[1], false)
+        const [e1, tmps1] = removeComplexOperandsAtom(e.args[0])
+        const [e2, tmps2] = removeComplexOperandsAtom(e.args[1])
         const tmps = [...tmps1, ...tmps2]
         return [Var(tmp), [[tmp, Prim(e.op, e1, e2)], ...tmps]]
       } else {
@@ -247,15 +245,21 @@ function removeComplexOperandsAtom(e: Exp, isTail: boolean): [Exp, Array<[string
       }
     }
     case "if":
-      // TODO not at all sure this is right -- at least I should recur with -Exp
+      // chapter 4 notes that e.cond should *definitely* be an expression, so I'm going to leave all 3
+      // as-is and see whether explicateTail will fix things up
       const tmp = gensym()
-      return [Var(tmp), [[tmp, If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else))]]]
+      return [
+        Var(tmp),
+        [
+          [
+            tmp,
+            If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else)),
+          ],
+        ],
+      ]
     case "let": {
-      const [e1, tmpsE] = removeComplexOperandsAtom(e.exp, false)
-      const [body1, tmpsBody] = removeComplexOperandsAtom(e.body, isTail)
-      if ((e1.kind === "var" || e1.kind === "int") && isTail) {
-        return [generateTmpLets(Let(e.name, e1, generateTmpLets(body1, tmpsBody)), tmpsE), []]
-      }
+      const [e1, tmpsE] = removeComplexOperandsAtom(e.exp)
+      const [body1, tmpsBody] = removeComplexOperandsAtom(e.body)
       const tmp = gensym()
       return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
     }
@@ -280,44 +284,6 @@ function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
       let x = env.get(e.name) ? gensym() : e.name
       env = new AList(e.name, x, env)
       return Let(x, uniquifyExp(e.exp, env), uniquifyExp(e.body, env))
-    }
-  }
-}
-function explicateAssign(e: Exp, x: string, k: Stmt[]): Stmt[] {
-  switch (e.kind) {
-    case "if": // TODO this needs to be much more complicated
-    case "var":
-    case "int":
-    case "bool":
-    case "prim":
-      return [Assign(Var(x), e), ...k]
-    case "let": {
-      return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
-    }
-  }
-}
-export function explicateTail(e: Exp): Stmt {
-  switch (e.kind) {
-    case "if": // TODO: this needs to be much more complicated
-    case "var":
-    case "int":
-    case "bool":
-    case "prim":
-      return Return(e)
-    case "let": {
-      const tail = explicateTail(e.body)
-      switch (tail.kind) {
-        case "seq":
-          return Seq(explicateAssign(e.exp, e.name, tail.statements))
-        case "return":
-          return Seq(explicateAssign(e.exp, e.name, [tail]))
-        case "goto":
-          throw new Error("don't know how to handle goto")
-        case "if":
-          throw new Error("don't know how to handle if")
-        case "assign":
-          throw new Error("Unexpected assign")
-      }
     }
   }
 }

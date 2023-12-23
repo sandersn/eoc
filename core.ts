@@ -23,6 +23,7 @@ export function zip<T, U>(ts: T[], us: U[]): Array<[T, U]> {
 }
 /** Read a number from stdin
  * use readline something something can't be bothered
+ * TODO: Better for testing: use a counter or a random number generator with a seed
  */
 export function read() {
   return 0

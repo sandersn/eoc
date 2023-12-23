@@ -1,9 +1,31 @@
+import assert from "assert"
 import { assertDefined } from "./core.js"
-import { Exp, Prim, Ref, Imm, Reg, Stmt, Program, CProgram, X86Program, Instr, Block, Callq } from "./factory.js"
-import { interpExp, explicateTail, emitExp } from "./language.js"
+import {
+  Assign,
+  Var,
+  Return,
+  Seq,
+  Exp,
+  Cmp,
+  Prim,
+  Ref,
+  Imm,
+  Reg,
+  Stmt,
+  Program,
+  CProgram,
+  X86Program,
+  Instr,
+  Block,
+  Callq,
+  Goto,
+  IfStmt,
+  Bool,
+} from "./factory.js"
+import { interpExp, emitExp } from "./language.js"
 import { DirectedGraph, AList } from "./structures.js"
 /** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
-function bind(s: Stmt): Map<string, number> {
+function bind(blocks: [string, Stmt][]): Map<string, number> {
   const env: Map<string, number> = new Map()
   let i = 1
   function worker(s: Stmt): void {
@@ -15,11 +37,12 @@ function bind(s: Stmt): Map<string, number> {
       case "return":
         break
       case "seq":
-        for (const statement of s.statements) worker(statement)
+        worker(s.head)
+        worker(s.tail)
         break
     }
   }
-  worker(s)
+  for (const [_, stmt] of blocks) worker(stmt)
   return env
 }
 export function selectInstructions(p: CProgram): X86Program {
@@ -85,7 +108,7 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
     case "if":
       throw new Error("Don't know how to select instructions for if")
     case "seq":
-      return s.statements.flatMap(s => selectInstructionsStmt(s))
+      return [...selectInstructionsStmt(s.head), ...selectInstructionsStmt(s.tail)]
   }
 }
 function selectInstructionsAtom(e: Exp): Ref {
@@ -113,7 +136,8 @@ export function interpProgram(p: CProgram): number {
         return v
       }
       case "seq":
-        return e.statements.reduce((_, s) => interpStatement(s), 0)
+        interpStatement(e.head)
+        return interpStatement(e.tail)
       case "if":
         return interpStatement(interpExp(e.cond, env2) ? e.then : e.else)
       case "goto":
@@ -130,20 +154,107 @@ function emitStatement(e: Stmt): string {
     case "return":
       return `return ${emitExp(e.exp)};\n`
     case "seq":
-      return e.statements.map(s => emitStatement(s)).join("")
+      return emitStatement(e.head) + emitStatement(e.tail)
     case "goto":
       return `goto ${e.label};\n`
     case "if":
-      return `if (${emitExp(e.cond)}) ${emitStatement(e.then)} else ${emitStatement(e.else)}\n`
+      return `if ${emitExp(e.cond)} ${emitStatement(e.then)}else ${emitStatement(e.else)}\n`
   }
 }
 export function emitProgram(p: CProgram): string {
-  return emitStatement(assertDefined(p.body.get("start")))
+  let emit = ''
+  for (const [name, stmts] of p.body) {
+    emit += `\t${name}:\n${emitStatement(stmts)}`
+  }
+  return emit
 }
 export function explicateControl(p: Program): CProgram {
+  const blocks: [string, Stmt][] = []
   const start = explicateTail(p.body)
-  return CProgram(
-    bind(start), // for now; the only block is :start; after that, storing ALL locals on the program doesn't make much sense
-    new Map([["start", start]])
-  )
+  blocks.push(["start", start])
+  return CProgram(bind(blocks), new Map(blocks))
+
+  function explicateAssign(e: Exp, x: string, k: Stmt): Stmt {
+    switch (e.kind) {
+      case "var":
+      case "int":
+      case "bool":
+      case "prim":
+        return Seq(Assign(Var(x), e), k)
+      case "if":
+        // TODO: I just wrote this mechanically (or copilot did) but it works. Come up with more test cases to break it!
+        k = createBlock(k)
+        return explicatePred(e.cond, explicateAssign(e.then, x, k), explicateAssign(e.else, x, k))
+      case "let": {
+        return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
+      }
+    }
+  }
+  function explicateTail(e: Exp): Stmt {
+    switch (e.kind) {
+      case "var":
+      case "int":
+      case "bool":
+      case "prim":
+        return Return(e)
+      case "if":
+        return explicatePred(e.cond, explicateTail(e.then), explicateTail(e.else))
+      case "let": {
+        const tail = explicateTail(e.body)
+        switch (tail.kind) {
+          case "seq":
+          case "return":
+            return explicateAssign(e.exp, e.name, tail)
+          case "goto":
+            throw new Error("Checker should prevent goto from appearing here")
+          case "if":
+            return explicateAssign(e.exp, e.name, explicatePred(tail.cond, tail.then, tail.else))
+          case "assign":
+            throw new Error("Unexpected assign")
+        }
+      }
+    }
+  }
+  function createBlock(k: Stmt): Goto {
+    if (k.kind === "goto") return k
+    const label = genLabel("block")
+    blocks.push([label, k])
+    return Goto(label)
+  }
+  function explicatePred(cond: Exp, then: Stmt, else_: Stmt): Stmt {
+    switch (cond.kind) {
+      case "var":
+        return IfStmt(Prim("==", cond, Bool(true)), createBlock(then), createBlock(else_))
+      case "int":
+        throw new Error("Type checker should prevent numbers from appearing here")
+      case "bool":
+        return cond.val ? then : else_
+      case "prim":
+        switch (cond.op) {
+          case "==":
+          case ">":
+          case "<":
+          case ">=":
+          case "<=":
+            return IfStmt(cond as Cmp, createBlock(then), createBlock(else_))
+          case "not":
+            return explicatePred(cond.args[0], else_, then)
+          case "and":
+          case "or":
+            throw new Error("and/or not expected in this pass of the compiler")
+          default:
+            throw new Error(`op ${cond.op} not expected in this pass of the compiler`)
+        }
+      case "if":
+        then = createBlock(then)
+        else_ = createBlock(else_)
+        return explicatePred(cond.cond, explicatePred(cond.then, then, else_), explicatePred(cond.else, then, else_))
+      case "let":
+        return explicateAssign(cond.exp, cond.name, explicatePred(cond.body, then, else_))
+    }
+  }
+}
+let counter = 0
+function genLabel(prefix = "g") {
+  return prefix + counter++
 }

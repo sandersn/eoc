@@ -8,7 +8,7 @@ import { parse } from "node:path"
 import { Program } from "./factory.js"
 function test(name: string, actual: number, expected: number) {
   if (actual !== expected) {
-    console.log(`Test ${name} failed: expected ${expected}, actual ${actual}`)
+    console.log(`Test '${name}' failed: expected ${expected}, actual ${actual}`)
   }
 }
 function runLvar(p: Program) {
@@ -30,19 +30,17 @@ function runExplicateControl(sexp: string) {
   return c.interpProgram(p)
 }
 function runAssignHomes(program: Program, verbose = false) {
-
-    const parsedProgram = l.typeCheckProgram(program)
-    const p = removeComplexOperands(uniquifyProgram(parsedProgram))
-    if (verbose) console.log(l.emitProgram(p))
-    // const p = explicateControl(removeComplexOperands(uniquifyProgram(parsedProgram)))
-    return l.interpProgram(p)
-    // const initial = uncoverLive(selectInstructions(p))
-    // buildInterference(initial)
-    // const xp = emitPreludeConclusion(patchInstructions(allocateRegisters(initial)))
-    // console.log(x.emitProgram(xp))
-    // console.log(xp.blocks.get("start")!.info.references)
-    // console.log(xp.blocks.get("start")!.info.conflicts)
-    // return x.interpProgram(xp)
+  const parsedProgram = l.typeCheckProgram(program)
+  const p = explicateControl(removeComplexOperands(uniquifyProgram(parsedProgram)))
+  if (verbose) console.log(c.emitProgram(p))
+  return c.interpProgram(p)
+  // const initial = uncoverLive(selectInstructions(p))
+  // buildInterference(initial)
+  // const xp = emitPreludeConclusion(patchInstructions(allocateRegisters(initial)))
+  // console.log(x.emitProgram(xp))
+  // console.log(xp.blocks.get("start")!.info.references)
+  // console.log(xp.blocks.get("start")!.info.conflicts)
+  // return x.interpProgram(xp)
 }
 function testLvar(name: string, sexp: string, verbose = false) {
   const program = reparsePrimitives(parseProgram(sexp))
@@ -54,9 +52,10 @@ test("test list basic", runLvar(parseProgram("(+ 1 2)")), 3)
 test("test lint basic", runLvar(parseProgram("(+ (+ 3 4) 12))")), 19)
 test("test lvar basic", runLvar(parseProgram("(let (y (+ 1 2)) y)")), 3)
 test("test lvar basic", runLvar(parseProgram("(let (x 1) (let (y 2) (+ x y)))")), 3)
-testLvar("test lvar remove complex operands", "(+ 42 (- 10))")
-testLvar("t", "(+ 42 (+ (+ 3 4) 12))")
-testLvar("t", "(+ (let (y (+ 3 4)) (+ y 5)) 12)")
+testLvar("let-in-let-exp", "(let (x (let (y (+ 1 1)) (+ y 1))) x)")
+testLvar("exp-unary-negate", "(+ 42 (- 10))")
+testLvar("exp-nested-+", "(+ 42 (+ (+ 3 4) 12))")
+testLvar("exp-nested-let", "(+ (let (y (+ 3 4)) (+ y 5)) 12)")
 testLvar("t", "(let (a 42) (let (b a) b))")
 testLvar("t", "(let (y (+ 1 2)) y)")
 testLvar("t1", "(let (x 1) (let (y 2) (+ x y)))")
@@ -68,9 +67,10 @@ testLvar("t", "(let (v 1) (let (w 42) (let (x (+ v 7)) (let (y x) (let (z (+ x w
 testLvar("boolean", "(let (x #t) (let (y #f) 1))")
 testLvar("if-boolean", "(let (x #t) (let (y #f) (if x 4 3)))")
 testLvar("if", "(let (x #t) (let (y #f) (if x 1 2)))")
-testLvar("or", "(let (x #t) (let (y #f) (if (or y x) 3 4)))")
-// TODO: Check how complex then/elses get simplified
-testLvar("and", "(let (x #t) (let (y #f) (if (and x y) 1 (let (x 12) (let (y 13) (+ x y))))))")
+testLvar("if-or", "(let (x #t) (let (y #f) (if (or y x) 3 4)))")
+testLvar("if-and", "(let (x #t) (let (y #f) (if (and x y) 1 (let (x 12) (let (y 13) (+ x y))))))")
+testLvar("if-and-or", "(let (x #t) (let (y #f) (if (and (or x x) y) 1 (let (z (or x y)) 14))))")
+testLvar("andlet", "(let (x #t) (let (y #f) (if (and (let (x #f) (or x #t)) y) 1 (let (z (or x y)) 14))))")
 testLvar("not", "(let (x #t) (let (y #f) (if (not x) 1 2)))")
 testLvar(">=", "(let (x 1) (let (y 2) (if (>= x y) 1 0)))")
 testLvar("<=", "(let (x 1) (let (y 2) (if (<= x y) 1 0)))")
