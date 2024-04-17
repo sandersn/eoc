@@ -1,4 +1,3 @@
-import assert from "assert"
 import { assertDefined } from "./core.js"
 import {
   Assign,
@@ -11,6 +10,7 @@ import {
   Ref,
   Imm,
   Reg,
+  ByteReg,
   Stmt,
   Program,
   CProgram,
@@ -21,6 +21,10 @@ import {
   Goto,
   IfStmt,
   Bool,
+  equalRef,
+  Jmp,
+  JmpIf,
+  Cc,
 } from "./factory.js"
 import { interpExp, emitExp } from "./language.js"
 import { DirectedGraph, AList } from "./structures.js"
@@ -46,19 +50,17 @@ function bind(blocks: [string, Stmt][]): Map<string, number> {
   return env
 }
 export function selectInstructions(p: CProgram): X86Program {
-  const start = assertDefined(p.body.get("start"))
-  return {
+  const ret: X86Program = {
     info: new Map(),
-    blocks: new Map([
-      [
-        "start",
-        Block(
-          { homes: new Map(), references: [], conflicts: new DirectedGraph() },
-          selectInstructionsStmt(assertDefined(start))
-        ),
-      ],
-    ]),
+    blocks: new Map([]),
   }
+  for (const [name, stmt] of p.body) {
+    ret.blocks.set(
+      name,
+      Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, selectInstructionsStmt(stmt))
+    )
+  }
+  return ret
 }
 function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
   switch (e.kind) {
@@ -93,8 +95,34 @@ function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
           Instr("subq", selectInstructionsAtom(e.args[1]), to),
         ]
       }
+    case "not":
+      const arg = selectInstructionsAtom(e.args[0])
+      if (equalRef(to, arg)) {
+        return [Instr("xorq", Imm(1), to)]
+      }
+      return [Instr("movq", arg, to), Instr("xorq", Imm(1), to)]
+    case "==":
+    case "<":
+    case "<=":
+    case ">":
+    case ">=":
+      return [
+        Instr("cmpq", selectInstructionsAtom(e.args[1]), selectInstructionsAtom(e.args[0])),
+        Instr("set", selectInstructionsOp(e.op), ByteReg("al")),
+        Instr("movzbq", ByteReg("al"), to),
+      ]
     default:
       throw new Error("Unexpected primitive")
+  }
+}
+function selectInstructionsOp(op: string): Cc {
+  switch (op) {
+    case "==": return "e"
+    case "<": return "l"
+    case "<=": return "le"
+    case ">": return 'g'
+    case '>=': return 'ge'
+    default: throw new Error("unexpected op " + op)
   }
 }
 function selectInstructionsStmt(s: Stmt): Instr[] {
@@ -104,9 +132,13 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
     case "return":
       return selectInstructionsExp(s.exp, Reg("rax"))
     case "goto":
-      throw new Error("Don't know how to select instructions for goto")
+      return [Jmp(s.label)]
     case "if":
-      throw new Error("Don't know how to select instructions for if")
+      return [
+        Instr("cmpq", selectInstructionsAtom(s.cond.args[1]), selectInstructionsAtom(s.cond.args[0])), 
+        JmpIf(selectInstructionsOp(s.cond.op), s.then.label), 
+        Jmp(s.else.label)
+      ]
     case "seq":
       return [...selectInstructionsStmt(s.head), ...selectInstructionsStmt(s.tail)]
   }
@@ -150,21 +182,21 @@ export function interpProgram(p: CProgram): number {
 function emitStatement(e: Stmt): string {
   switch (e.kind) {
     case "assign":
-      return `${e.var.name} = ${emitExp(e.exp)};\n`
+      return `\t${e.var.name} = ${emitExp(e.exp)};\n`
     case "return":
-      return `return ${emitExp(e.exp)};\n`
+      return `\treturn ${emitExp(e.exp)};\n`
     case "seq":
       return emitStatement(e.head) + emitStatement(e.tail)
     case "goto":
-      return `goto ${e.label};\n`
+      return `\tgoto ${e.label};\n`
     case "if":
-      return `if ${emitExp(e.cond)} ${emitStatement(e.then)}else ${emitStatement(e.else)}\n`
+      return `\tif ${emitExp(e.cond)} ${emitStatement(e.then)}\telse ${emitStatement(e.else)}`
   }
 }
 export function emitProgram(p: CProgram): string {
-  let emit = ''
+  let emit = ""
   for (const [name, stmts] of p.body) {
-    emit += `\t${name}:\n${emitStatement(stmts)}`
+    emit += `${name}:\n${emitStatement(stmts)}`
   }
   return emit
 }

@@ -1,20 +1,6 @@
 import { assertDefined, read } from "./core.js"
 import { DirectedGraph } from "./structures.js"
-import { Var, Ref, Imm, Reg, Deref, X86Program, Instr, Block, Jmp, Ret } from "./factory.js"
-function equalRef(r1: Ref, r2: Ref): boolean {
-  if (r1.kind !== r2.kind) return false
-  switch (r1.kind) {
-    case "imm":
-      return r1.int === (r2 as Imm).int
-    case "reg":
-      return r1.reg === (r2 as Reg).reg
-    case "var":
-      return r1.name === (r2 as Var).name
-    case "deref":
-      return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
-  }
-}
-
+import { Var, Ref, Imm, Reg, Deref, X86Program, Instr, Block, Jmp, Ret, Cc, ByteReg, equalRef } from "./factory.js"
 function frameStackSize(homes: Map<string, Reg | Deref>): number {
   let stackLocations: Set<number> = new Set()
   let calleeLocations: Set<string> = new Set()
@@ -91,6 +77,9 @@ export function patchInstructions(p: X86Program): X86Program {
 function patchInstructionsInstr(i: Instr): Instr[] {
   switch (i.kind) {
     case "instr":
+      if (i.op === 'set') {
+        throw new Error("don't know how to patchInstructionsInstr for set yet")
+      }
       if (i.args.length === 2 && i.args[0].kind === "deref" && i.args[1].kind === "deref") {
         return [
           Instr("movq", i.args[0], { kind: "reg", reg: "rax" }),
@@ -104,6 +93,8 @@ function patchInstructionsInstr(i: Instr): Instr[] {
     case "ret":
     case "jmp":
       return [i]
+    case "jmpif":
+      throw new Error("don't know how to patchInstructionsInstr for jmpif yet")
   }
 }
 export function buildInterference(p: X86Program): void {
@@ -166,12 +157,20 @@ function liveReadInstr(i: Instr): string[] {
           return i.args.map(nameOfRef).filter((s): s is string => s !== undefined)
         case "pushq":
           return []
+        case "set":
+          throw new Error("don't know how to liveReadInstr for set yet")
+        case "xorq":
+        case "cmpq":
+        case "movzbq":
+          throw new Error(`don't know how to liveReadInstr for ${i.op} yet`)
       }
     case "callq":
     // TODO: callq reads from all caller-saved registers
     case "ret":
     case "jmp":
       return []
+    case "jmpif":
+      throw new Error("don't know how to liveReadInstr for jmpif yet")
   }
 }
 function liveWriteInstr(i: Instr): string[] {
@@ -187,12 +186,20 @@ function liveWriteInstr(i: Instr): string[] {
           return [i.args[0]].map(nameOfRef).filter((s): s is string => s !== undefined)
         case "popq":
           return []
+        case "set":
+          throw new Error("don't know how to liveWriteInstr for set yet")
+        case "xorq":
+        case "cmpq":
+        case "movzbq":
+          throw new Error(`don't know how to liveWriteInstr for ${i.op} yet`)
       }
     case "callq":
     // TODO: callq writes to all callee-saved registers
     case "ret":
     case "jmp":
       return []
+    case "jmpif":
+      throw new Error("don't know how to liveWriteInstr for jmpif yet")
   }
 }
 export function allocateRegisters(p: X86Program): X86Program {
@@ -269,11 +276,14 @@ function assignHomesBlock(block: Block): Block {
 function assignHomesInstr(info: Map<string, Deref | Reg>, i: Instr): Instr {
   switch (i.kind) {
     case "instr":
+      if (i.op === "set") throw new Error("don't know how to assignHomesInstr for set yet")
       return Instr(i.op, ...i.args.map(a => assignHomesRef(info, a)))
     case "callq":
     case "ret":
     case "jmp":
       return i
+    case "jmpif":
+      throw new Error("don't know how to assignHomesInstr for jmpif yet")
   }
 }
 function assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
@@ -282,11 +292,13 @@ function assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
     case "reg":
     case "deref":
       return a
+    case "bytereg":
+      throw new Error("don't know how to assignHomesRef for byteref yet (but probably identity)")
     case "var":
       return assertDefined(info.get(a.name))
   }
 }
-function emitProgram(xp: X86Program): string {
+export function emitProgram(xp: X86Program): string {
   return Array.from(xp.blocks.entries())
     .map(([name, b]) => emitBlock(name, b))
     .join("\n")
@@ -297,6 +309,7 @@ function emitBlock(name: string, block: Block) {
 function emitInstr(e: Instr): string {
   switch (e.kind) {
     case "instr":
+      if (e.op === "set") return `${e.op}${e.args[0]} ${emitRef(e.args[1])}`
       return `${e.op} ${e.args.map(emitRef).join(", ")}`
     case "callq":
       return `callq ${e.label}`
@@ -304,6 +317,8 @@ function emitInstr(e: Instr): string {
       return "ret"
     case "jmp":
       return `jmp ${e.label}`
+    case "jmpif":
+      return `j${e.cc} ${e.label}`
   }
 }
 function emitRef(r: Ref): string {
@@ -314,6 +329,8 @@ function emitRef(r: Ref): string {
       return r.name
     case "reg":
       return `%${r.reg}`
+    case "bytereg":
+      return `%${r.bytereg}`
     case "deref":
       return `${r.offset}(%${r.reg})`
   }
@@ -321,6 +338,10 @@ function emitRef(r: Ref): string {
 export function interpProgram(xp: X86Program) {
   const stack: number[] = []
   const registers: Map<string, number> = new Map()
+  // TODO: Technically, byteregisters are halves of rax, rbx, rcx, rdx
+  // but they're not used in an overlapping way as far as I know
+  const byteregisters: Map<string, number> = new Map()
+  const eflags = { left: 0, right: 0 }
   let blocks: Map<string, Block> = xp.blocks
   let block: Block | undefined = xp.blocks.get("main")
   while (block) {
@@ -354,6 +375,19 @@ export function interpProgram(xp: X86Program) {
             return write(e.args[1], interpRef(e.args[1]) - interpRef(e.args[0]))
           case "negq":
             return write(e.args[0], -interpRef(e.args[0]))
+          case "xorq":
+            return write(e.args[1], interpRef(e.args[1]) ^ interpRef(e.args[0]))
+          case "cmpq":
+            eflags.left = interpRef(e.args[1]) // cmpq is backwards on purpose!
+            eflags.right = interpRef(e.args[0])
+            return
+          case "set":
+            // TODO: Should maybe assert that args[1] is a bytereg
+            write(e.args[1], compare(e.args[0]) ? 1 : 0)
+            return
+          case "movzbq":
+            // TODO: Should maybe assert that args[0] is a bytereg
+            return write(e.args[1], interpRef(e.args[0]))
           case "popq":
             write(e.args[0], stack[interpRef(rsp)])
             write(rsp, interpRef(rsp) + 8)
@@ -363,17 +397,40 @@ export function interpProgram(xp: X86Program) {
             stack[interpRef(rsp)] = interpRef(e.args[0])
             return
           default:
-            throw new Error("unexpected instruction: " + e.op)
+            throw new Error("unexpected instruction: " + (e as any).op)
         }
       }
       case "callq":
+        // callq is only used for `read` right now
         registers.set("rax", read())
-        break
+        return
       case "ret":
         return "ret"
       case "jmp":
         block = blocks.get(e.label)
         return "jmp"
+      case "jmpif":
+        if (compare(e.cc)) {
+          block = blocks.get(e.label)
+          return "jmp"
+        }
+        return
+    }
+  }
+  function compare(cc: Cc) {
+    switch (cc) {
+      case "e":
+        return eflags.left === eflags.right
+      case "l":
+        return eflags.left < eflags.right
+      case "le":
+        return eflags.left <= eflags.right
+      case "g":
+        return eflags.left > eflags.right
+      case "ge":
+        return eflags.left >= eflags.right
+      default:
+        throw new Error("unexpected compare: " + cc)
     }
   }
   function interpRef(r: Ref): number {
@@ -384,6 +441,8 @@ export function interpProgram(xp: X86Program) {
         return registers.get(r.name) ?? 0
       case "reg":
         return registers.get(r.reg) ?? 0
+      case "bytereg":
+        return byteregisters.get(r.bytereg) ?? 0
       case "deref":
         return assertDefined(stack[(registers.get(r.reg) ?? 0) + r.offset])
     }

@@ -72,15 +72,19 @@ export function CProgram(locals: Map<string, number>, body: Map<string, Stmt>): 
 
 /** for ASM */
 export type Reg = { kind: "reg"; reg: string }
+export type ByteReg = { kind: "bytereg"; bytereg: "ah" | "al" | "bh" | "bl" | "ch" | "cl" | "dh" | "dl" }
 export type Deref = { kind: "deref"; reg: string; offset: number }
 export type Imm = { kind: "imm"; int: number }
-export type Ref = Var | Imm | Reg | Deref
-export type Ops = "addq" | "subq" | "negq" | "movq" | "pushq" | "popq"
+export type Ref = Var | Imm | Reg | ByteReg | Deref
+export type Ops = "addq" | "subq" | "negq" | "xorq" | "cmpq" | "movq" | "movzbq" | "pushq" | "popq"
+export type Cc = "e" | "l" | "le" | "g" | "ge"
 export type Instr =
   | { kind: "instr"; op: Ops; args: Ref[] }
+  | { kind: "instr"; op: "set"; args: [Cc, Ref] }
   | { kind: "callq"; label: string; int: number }
   | { kind: "ret" }
   | { kind: "jmp"; label: string }
+  | { kind: "jmpif"; cc: Cc; label: string }
 export type X86Program = {
   info: Map<string, number>
   blocks: Map<string, Block>
@@ -98,14 +102,34 @@ export type Block = {
 export function Reg(reg: string): Reg {
   return { kind: "reg", reg }
 }
+export function ByteReg(bytereg: "ah" | "al" | "bh" | "bl" | "ch" | "cl" | "dh" | "dl"): ByteReg {
+  return { kind: "bytereg", bytereg }
+}
 export function Deref(reg: string, offset: number): Deref {
   return { kind: "deref", reg, offset }
 }
 export function Imm(int: number): Imm {
   return { kind: "imm", int }
 }
-export function Instr(op: Ops, ...args: Ref[]): Instr {
-  return { kind: "instr", op, args }
+export function equalRef(r1: Ref, r2: Ref): boolean {
+  if (r1.kind !== r2.kind) return false
+  switch (r1.kind) {
+    case "imm":
+      return r1.int === (r2 as Imm).int
+    case "reg":
+      return r1.reg === (r2 as Reg).reg
+    case "bytereg":
+      return r1.bytereg === (r2 as ByteReg).bytereg
+    case "var":
+      return r1.name === (r2 as Var).name
+    case "deref":
+      return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
+  }
+}
+export function Instr(op: "set", cc: Cc, arg: Ref): Instr
+export function Instr(op: Ops, ...args: Ref[]): Instr
+export function Instr(op: Ops | "set", ...args: Ref[] | [Cc, Ref]): Instr {
+  return { kind: "instr", op, args } as Instr
 }
 export function Callq(label: string, int: number): Instr {
   return { kind: "callq", label, int }
@@ -115,6 +139,9 @@ export function Ret(): Instr {
 }
 export function Jmp(label: string): Instr {
   return { kind: "jmp", label }
+}
+export function JmpIf(cc: Cc, label: string): Instr {
+  return { kind: "jmpif", cc, label }
 }
 export function X86Program(info: Map<string, number>, blocks: Map<string, Block>): X86Program {
   return { info, blocks }
