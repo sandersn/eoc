@@ -1,6 +1,6 @@
 import assert from "node:assert"
 import { assertDefined } from "./core.js"
-export class DirectedGraph<T> {
+export class Graph<T> {
   g: Map<T, Set<T>> = new Map()
   addVertex(v: T) {
     assert(!this.g.has(v))
@@ -21,6 +21,56 @@ export class DirectedGraph<T> {
   }
   inVertices(): T[] {
     return Array.from(this.g.keys())
+  }
+}
+export class DirectedGraph<T> {
+  g: [T, T][] = []
+  addEdge(v: T, w: T) {
+    this.g.push([v, w])
+  }
+  transpose() {
+    const g: [T, T][] = []
+    for (const [v,w] of this.g) {
+      g.push([w,v])
+    }
+    this.g = g
+  }
+  sort(): T[] {
+    const sorted = []
+    const orphans = this.orphans()
+    while (orphans.length) {
+      const n = orphans.shift()! // pop would also work fine
+      sorted.push(n)
+      for (const m of this.neighbours(n)) {
+        this.delete(n, m)
+        if (this.isOrphan(m)) {
+          orphans.push(m)
+        }
+      }
+    }
+    if (this.g.length)
+      throw new Error("cycle detected: " + JSON.stringify(this.g))
+    return sorted
+  }
+  delete(v: T, w: T) {
+    let i = 0
+    for (const [n,m] of this.g) {
+      if (n === v && m === w) {
+        this.g.splice(i, 1)
+        break
+      }
+      i++
+    }
+  }
+  orphans(): T[] {
+    return this.g.map(([n,_]) => n).filter(n => this.isOrphan(n))
+  }
+  /** linear, successful is worst case */
+  isOrphan(v: T): boolean {
+    return !this.g.find(([_,m]) => v === m)
+  }
+  neighbours(v: T): T[] {
+    return this.g.filter(([n,_]) => v === n).map(([_,m]) => m)
   }
 }
 /** Association list, like from Lisp */

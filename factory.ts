@@ -1,4 +1,4 @@
-import { AList, DirectedGraph } from "./structures.js"
+import { AList, Graph } from "./structures.js"
 /** for Language */
 export type Var = { kind: "var"; name: string }
 export type Prim = { kind: "prim"; op: string; args: Exp[] }
@@ -72,6 +72,7 @@ export function CProgram(locals: Map<string, number>, body: Map<string, Stmt>): 
 
 /** for ASM */
 export type Reg = { kind: "reg"; reg: string }
+// TODO: Maybe name it reg instead of bytereg since reg is elsewhere an unconstrained string
 export type ByteReg = { kind: "bytereg"; bytereg: "ah" | "al" | "bh" | "bl" | "ch" | "cl" | "dh" | "dl" }
 export type Deref = { kind: "deref"; reg: string; offset: number }
 export type Imm = { kind: "imm"; int: number }
@@ -94,7 +95,7 @@ export type Block = {
   info: {
     homes: Map<string, Reg | Deref>
     references: Array<Set<string>>
-    conflicts: DirectedGraph<string>
+    conflicts: Graph<string>
   }
   instructions: Instr[]
 }

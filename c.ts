@@ -27,7 +27,7 @@ import {
   Cc,
 } from "./factory.js"
 import { interpExp, emitExp } from "./language.js"
-import { DirectedGraph, AList } from "./structures.js"
+import { Graph, AList } from "./structures.js"
 /** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
 function bind(blocks: [string, Stmt][]): Map<string, number> {
   const env: Map<string, number> = new Map()
@@ -55,10 +55,8 @@ export function selectInstructions(p: CProgram): X86Program {
     blocks: new Map([]),
   }
   for (const [name, stmt] of p.body) {
-    ret.blocks.set(
-      name,
-      Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, selectInstructionsStmt(stmt))
-    )
+    const instructions = selectInstructionsStmt(stmt)
+    ret.blocks.set(name, Block({ homes: new Map(), references: [], conflicts: new Graph() }, instructions))
   }
   return ret
 }
@@ -117,12 +115,18 @@ function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
 }
 function selectInstructionsOp(op: string): Cc {
   switch (op) {
-    case "==": return "e"
-    case "<": return "l"
-    case "<=": return "le"
-    case ">": return 'g'
-    case '>=': return 'ge'
-    default: throw new Error("unexpected op " + op)
+    case "==":
+      return "e"
+    case "<":
+      return "l"
+    case "<=":
+      return "le"
+    case ">":
+      return "g"
+    case ">=":
+      return "ge"
+    default:
+      throw new Error("unexpected op " + op)
   }
 }
 function selectInstructionsStmt(s: Stmt): Instr[] {
@@ -130,14 +134,14 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
     case "assign":
       return selectInstructionsExp(s.exp, s.var)
     case "return":
-      return selectInstructionsExp(s.exp, Reg("rax"))
+      return [...selectInstructionsExp(s.exp, Reg("rax")), Jmp("conclusion")]
     case "goto":
       return [Jmp(s.label)]
     case "if":
       return [
-        Instr("cmpq", selectInstructionsAtom(s.cond.args[1]), selectInstructionsAtom(s.cond.args[0])), 
-        JmpIf(selectInstructionsOp(s.cond.op), s.then.label), 
-        Jmp(s.else.label)
+        Instr("cmpq", selectInstructionsAtom(s.cond.args[1]), selectInstructionsAtom(s.cond.args[0])),
+        JmpIf(selectInstructionsOp(s.cond.op), s.then.label),
+        Jmp(s.else.label),
       ]
     case "seq":
       return [...selectInstructionsStmt(s.head), ...selectInstructionsStmt(s.tail)]

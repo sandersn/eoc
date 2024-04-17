@@ -1,6 +1,7 @@
 import { assertDefined, read } from "./core.js"
-import { DirectedGraph } from "./structures.js"
+import { Graph, DirectedGraph } from "./structures.js"
 import { Var, Ref, Imm, Reg, Deref, X86Program, Instr, Block, Jmp, Ret, Cc, ByteReg, equalRef } from "./factory.js"
+import assert from "node:assert"
 function frameStackSize(homes: Map<string, Reg | Deref>): number {
   let stackLocations: Set<number> = new Set()
   let calleeLocations: Set<string> = new Set()
@@ -50,7 +51,7 @@ export function emitPreludeConclusion(p: X86Program): X86Program {
   const stackSize = frameStackSize(start.info.homes)
   p.blocks.set(
     "main",
-    Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, [
+    Block({ homes: new Map(), references: [], conflicts: new Graph() }, [
       Instr("pushq", Reg("rbp")),
       Instr("movq", Reg("rsp"), Reg("rbp")),
       Instr("subq", Imm(stackSize), Reg("rsp")),
@@ -59,7 +60,7 @@ export function emitPreludeConclusion(p: X86Program): X86Program {
   )
   p.blocks.set(
     "conclusion",
-    Block({ homes: new Map(), references: [], conflicts: new DirectedGraph() }, [
+    Block({ homes: new Map(), references: [], conflicts: new Graph() }, [
       Instr("addq", Imm(stackSize), Reg("rsp")),
       Instr("popq", Reg("rbp")),
       Ret(),
@@ -124,16 +125,41 @@ function interferenceBlock(block: Block): void {
   }
 }
 export function uncoverLive(p: X86Program): X86Program {
-  const start = assertDefined(p.blocks.get("start"))
-  return X86Program(p.info, p.blocks.set("start", liveBlock(start, new Set(["rax", "rsp"]))))
+  const cfg = buildControlFlow(p.blocks)
+  cfg.transpose()
+  const flow = cfg.sort()
+  const labelToLive = new Map<string, Set<string>>([
+    ['conclusion', new Set(['rax', 'rsp'])]
+  ])
+  for (const name of flow) {
+    if (name === 'conclusion') continue
+    p.blocks.set(name, liveBlock(name, assertDefined(p.blocks.get(name)), labelToLive))
+  }
+  return p
 }
-function liveBlock(block: Block, initial: Set<string>): Block {
-  let after = initial
+function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
+  const flow: DirectedGraph<string> = new DirectedGraph()
+  for (const [name, block] of blocks) {
+    for (const i of block.instructions) {
+      if (i.kind === 'jmp' || i.kind === 'jmpif') {
+        flow.addEdge(name, i.label)
+      }
+    }
+  }
+  return flow
+}
+function liveBlock(name: string, block: Block, labelToLive: Map<string, Set<string>>): Block {
+  let after: Set<string> = new Set()
+  let prev: { kind: "jmp"; label: string } | undefined = undefined
   const references = [after]
   for (const i of block.instructions.toReversed()) {
     let before: Set<string>
     if (i.kind === "jmp") {
-      before = initial
+      before = labelToLive.get(i.label)!
+      prev = i
+    }
+    else if (i.kind === 'jmpif') {
+      before = new Set([...labelToLive.get(i.label)!, ...labelToLive.get(assertDefined(prev).label)!])
     } else {
       const reads = liveReadInstr(i)
       const writes = liveWriteInstr(i)
@@ -142,6 +168,7 @@ function liveBlock(block: Block, initial: Set<string>): Block {
     references.push(before)
     after = before
   }
+  labelToLive.set(name, after)
   return Block({ ...block.info, references: references.toReversed() }, block.instructions)
 }
 function liveReadInstr(i: Instr): string[] {
@@ -154,23 +181,26 @@ function liveReadInstr(i: Instr): string[] {
           return [i.args[0]].map(nameOfRef).filter((s): s is string => s !== undefined)
         case "addq":
         case "subq":
-          return i.args.map(nameOfRef).filter((s): s is string => s !== undefined)
-        case "pushq":
-          return []
-        case "set":
-          throw new Error("don't know how to liveReadInstr for set yet")
         case "xorq":
         case "cmpq":
+          return i.args.map(nameOfRef).filter((s): s is string => s !== undefined)
+        case "pushq":
+        case "set":
+          // I don't think eflags doesn't need to be in the live graph because
+          // 1. only cmpq can write to it
+          // 2. only set and jmpif can read from it
+          // So no interference problems.
+          return []
         case "movzbq":
-          throw new Error(`don't know how to liveReadInstr for ${i.op} yet`)
+          // reads from rax qua al/ah
+          return [nameOfRef(i.args[0]), nameOfByteRegContainer(i.args[0])].filter((s): s is string => s !== undefined)
       }
     case "callq":
     // TODO: callq reads from all caller-saved registers
     case "ret":
     case "jmp":
-      return []
     case "jmpif":
-      throw new Error("don't know how to liveReadInstr for jmpif yet")
+      return []
   }
 }
 function liveWriteInstr(i: Instr): string[] {
@@ -179,27 +209,26 @@ function liveWriteInstr(i: Instr): string[] {
       switch (i.op) {
         case "addq":
         case "subq":
+        case "xorq":
         case "movq":
+        case "movzbq":
           return [i.args[1]].map(nameOfRef).filter((s): s is string => s !== undefined)
         case "pushq":
         case "negq":
           return [i.args[0]].map(nameOfRef).filter((s): s is string => s !== undefined)
+        case "cmpq":
         case "popq":
           return []
         case "set":
-          throw new Error("don't know how to liveWriteInstr for set yet")
-        case "xorq":
-        case "cmpq":
-        case "movzbq":
-          throw new Error(`don't know how to liveWriteInstr for ${i.op} yet`)
+          // writes to rax as al/ah
+          return [nameOfRef(i.args[1]), nameOfByteRegContainer(i.args[1])].filter((s): s is string => s !== undefined)
       }
     case "callq":
     // TODO: callq writes to all callee-saved registers
     case "ret":
     case "jmp":
-      return []
     case "jmpif":
-      throw new Error("don't know how to liveWriteInstr for jmpif yet")
+      return []
   }
 }
 export function allocateRegisters(p: X86Program): X86Program {
@@ -455,6 +484,11 @@ export function interpProgram(xp: X86Program) {
       case "reg":
         registers.set(r.reg, source)
         break
+      case "bytereg":
+        // TODO: Actually, this should be the bottom/top of a/b/c/d, but my generated
+        // code should never expose this fact
+        byteregisters.set(r.bytereg, source)
+        break
       case "deref":
         stack[(registers.get(r.reg) ?? 0) + r.offset] = source
         break
@@ -469,8 +503,21 @@ function nameOfRef(r: Ref): string | undefined {
       return undefined
     case "var":
       return r.name
+    case "bytereg":
+      return r.bytereg
     case "reg":
     case "deref":
       return r.reg
+  }
+}
+function nameOfByteRegContainer(r: Ref) {
+  assert(r.kind === 'bytereg') 
+  switch (r.bytereg) {
+    case "ah": case 'al': return 'rax'
+    case 'bh': case 'bl': return 'rbx'
+    case 'ch': case 'cl': return 'rcx'
+    case 'dh': case 'dl': return 'rdx'
+    default:
+      throw new Error("Unexpected bytereg " + r.bytereg)
   }
 }
