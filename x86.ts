@@ -78,7 +78,7 @@ export function patchInstructions(p: X86Program): X86Program {
 function patchInstructionsInstr(i: Instr): Instr[] {
   switch (i.kind) {
     case "instr":
-      if (i.op === 'set') {
+      if (i.op === "set") {
         throw new Error("don't know how to patchInstructionsInstr for set yet")
       }
       if (i.args.length === 2 && i.args[0].kind === "deref" && i.args[1].kind === "deref") {
@@ -105,7 +105,7 @@ function interferenceBlock(block: Block): void {
   for (let i = 0; i < block.instructions.length; i++) {
     const instr = block.instructions[i]
     const live = block.info.references[i + 1]
-    if (instr.kind === "instr" && instr.op === "movq") {
+    if (instr.kind === "instr" && (instr.op === "movq" || instr.op === "movzbq")) {
       for (const v of live) {
         const source = nameOfRef(instr.args[0])
         const target = nameOfRef(instr.args[1])
@@ -128,11 +128,9 @@ export function uncoverLive(p: X86Program): X86Program {
   const cfg = buildControlFlow(p.blocks)
   cfg.transpose()
   const flow = cfg.sort()
-  const labelToLive = new Map<string, Set<string>>([
-    ['conclusion', new Set(['rax', 'rsp'])]
-  ])
+  const labelToLive = new Map<string, Set<string>>([["conclusion", new Set(["rax", "rsp"])]])
   for (const name of flow) {
-    if (name === 'conclusion') continue
+    if (name === "conclusion") continue
     p.blocks.set(name, liveBlock(name, assertDefined(p.blocks.get(name)), labelToLive))
   }
   return p
@@ -141,7 +139,7 @@ function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
   const flow: DirectedGraph<string> = new DirectedGraph()
   for (const [name, block] of blocks) {
     for (const i of block.instructions) {
-      if (i.kind === 'jmp' || i.kind === 'jmpif') {
+      if (i.kind === "jmp" || i.kind === "jmpif") {
         flow.addEdge(name, i.label)
       }
     }
@@ -157,8 +155,7 @@ function liveBlock(name: string, block: Block, labelToLive: Map<string, Set<stri
     if (i.kind === "jmp") {
       before = labelToLive.get(i.label)!
       prev = i
-    }
-    else if (i.kind === 'jmpif') {
+    } else if (i.kind === "jmpif") {
       before = new Set([...labelToLive.get(i.label)!, ...labelToLive.get(assertDefined(prev).label)!])
     } else {
       const reads = liveReadInstr(i)
@@ -232,7 +229,16 @@ function liveWriteInstr(i: Instr): string[] {
   }
 }
 export function allocateRegisters(p: X86Program): X86Program {
-  const b = assertDefined(p.blocks.get("start"))
+  // replace all variables with registers, similar to assignHomes
+  //   TODO: repurpose assignHomes/Ref to do this, but pass in homes instead of locals
+  //   Best way to do this is to rewrite assignHomes to use homes, and preprocess locals to do that, then test with existing tests
+  for (const [_, block] of p.blocks) {
+    allocateRegisterBlock(block)
+  }
+  return assignHomes(p)
+}
+
+function allocateRegisterBlock(b: Block): void {
   // get vertices = variables + registers (I think there is a list NOT in the conflicts graph)
   //   NOTE: conflicts doesn't include everything, but it does include everything that will be used in the algorithm, so it's good enough
   // TODO: It also includes registers, which doesn't make sense; there's got to be a better starting point.
@@ -267,10 +273,6 @@ export function allocateRegisters(p: X86Program): X86Program {
     homes.set(varreg, c in registers ? Reg(registers[c]) : Deref("rbp", -8 * c))
   }
   b.info.homes = homes
-  // replace all variables with registers, similar to assignHomes
-  //   TODO: repurpose assignHomes/Ref to do this, but pass in homes instead of locals
-  //   Best way to do this is to rewrite assignHomes to use homes, and preprocess locals to do that, then test with existing tests
-  return assignHomes(p)
 
   function maxBy<T>(it: Iterable<T>, f: (t: T) => number): T | undefined {
     let best: T | undefined
@@ -293,8 +295,10 @@ export function allocateRegisters(p: X86Program): X86Program {
   }
 }
 function assignHomes(p: X86Program): X86Program {
-  const start = assertDefined(p.blocks.get("start"))
-  return X86Program(p.info, p.blocks.set("start", assignHomesBlock(start)))
+  for (const [name, block] of p.blocks) {
+    p.blocks.set(name, assignHomesBlock(block))
+  }
+  return p
 }
 function assignHomesBlock(block: Block): Block {
   return Block(
@@ -305,14 +309,13 @@ function assignHomesBlock(block: Block): Block {
 function assignHomesInstr(info: Map<string, Deref | Reg>, i: Instr): Instr {
   switch (i.kind) {
     case "instr":
-      if (i.op === "set") throw new Error("don't know how to assignHomesInstr for set yet")
+      if (i.op === "set") return Instr(i.op, i.args[0], assignHomesRef(info, i.args[1]))
       return Instr(i.op, ...i.args.map(a => assignHomesRef(info, a)))
     case "callq":
     case "ret":
     case "jmp":
-      return i
     case "jmpif":
-      throw new Error("don't know how to assignHomesInstr for jmpif yet")
+      return i
   }
 }
 function assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
@@ -320,9 +323,8 @@ function assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
     case "imm":
     case "reg":
     case "deref":
-      return a
     case "bytereg":
-      throw new Error("don't know how to assignHomesRef for byteref yet (but probably identity)")
+      return a
     case "var":
       return assertDefined(info.get(a.name))
   }
@@ -511,12 +513,20 @@ function nameOfRef(r: Ref): string | undefined {
   }
 }
 function nameOfByteRegContainer(r: Ref) {
-  assert(r.kind === 'bytereg') 
+  assert(r.kind === "bytereg")
   switch (r.bytereg) {
-    case "ah": case 'al': return 'rax'
-    case 'bh': case 'bl': return 'rbx'
-    case 'ch': case 'cl': return 'rcx'
-    case 'dh': case 'dl': return 'rdx'
+    case "ah":
+    case "al":
+      return "rax"
+    case "bh":
+    case "bl":
+      return "rbx"
+    case "ch":
+    case "cl":
+      return "rcx"
+    case "dh":
+    case "dl":
+      return "rdx"
     default:
       throw new Error("Unexpected bytereg " + r.bytereg)
   }
