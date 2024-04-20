@@ -48,10 +48,10 @@ registers[-5] = "r15"
 export function emitPreludeConclusion(p: X86Program): X86Program {
   const start = assertDefined(p.blocks.get("start"))
   start.instructions.push({ kind: "jmp", label: "conclusion" })
-  const stackSize = frameStackSize(start.info.homes)
+  const stackSize = frameStackSize(p.info.homes)
   p.blocks.set(
     "main",
-    Block({ homes: new Map(), references: [], conflicts: new Graph() }, [
+    Block({ references: [] }, [
       Instr("pushq", Reg("rbp")),
       Instr("movq", Reg("rsp"), Reg("rbp")),
       Instr("subq", Imm(stackSize), Reg("rsp")),
@@ -60,20 +60,14 @@ export function emitPreludeConclusion(p: X86Program): X86Program {
   )
   p.blocks.set(
     "conclusion",
-    Block({ homes: new Map(), references: [], conflicts: new Graph() }, [
-      Instr("addq", Imm(stackSize), Reg("rsp")),
-      Instr("popq", Reg("rbp")),
-      Ret(),
-    ])
+    Block({ references: [] }, [Instr("addq", Imm(stackSize), Reg("rsp")), Instr("popq", Reg("rbp")), Ret()])
   )
   return p
 }
-export function patchInstructions(p: X86Program): X86Program {
-  const start = assertDefined(p.blocks.get("start"))
-  return X86Program(
-    p.info,
-    p.blocks.set("start", Block(start.info, start.instructions.flatMap(patchInstructionsInstr)))
-  )
+export function patchInstructions(p: X86Program): void {
+  for (const [name, block] of p.blocks) {
+    p.blocks.set(name, Block(block.info, block.instructions.flatMap(patchInstructionsInstr)))
+  }
 }
 function patchInstructionsInstr(i: Instr): Instr[] {
   switch (i.kind) {
@@ -99,9 +93,11 @@ function patchInstructionsInstr(i: Instr): Instr[] {
   }
 }
 export function buildInterference(p: X86Program): void {
-  interferenceBlock(assertDefined(p.blocks.get("start")))
+  for (const [_, block] of p.blocks) {
+    interferenceBlock(block, p.info.conflicts)
+  }
 }
-function interferenceBlock(block: Block): void {
+function interferenceBlock(block: Block, conflicts: Graph<string>): void {
   for (let i = 0; i < block.instructions.length; i++) {
     const instr = block.instructions[i]
     const live = block.info.references[i + 1]
@@ -110,21 +106,21 @@ function interferenceBlock(block: Block): void {
         const source = nameOfRef(instr.args[0])
         const target = nameOfRef(instr.args[1])
         if (target && v !== source && v !== target) {
-          block.info.conflicts.addEdge(target, v)
+          conflicts.addEdge(target, v)
         }
       }
     } else {
       for (const d of liveWriteInstr(instr)) {
         for (const v of live) {
           if (v !== d) {
-            block.info.conflicts.addEdge(d, v)
+            conflicts.addEdge(d, v)
           }
         }
       }
     }
   }
 }
-export function uncoverLive(p: X86Program): X86Program {
+export function uncoverLive(p: X86Program): void {
   const cfg = buildControlFlow(p.blocks)
   cfg.transpose()
   const flow = cfg.sort()
@@ -133,7 +129,6 @@ export function uncoverLive(p: X86Program): X86Program {
     if (name === "conclusion") continue
     p.blocks.set(name, liveBlock(name, assertDefined(p.blocks.get(name)), labelToLive))
   }
-  return p
 }
 function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
   const flow: DirectedGraph<string> = new DirectedGraph()
@@ -228,21 +223,21 @@ function liveWriteInstr(i: Instr): string[] {
       return []
   }
 }
-export function allocateRegisters(p: X86Program): X86Program {
+export function allocateRegisters(p: X86Program): void {
   // replace all variables with registers, similar to assignHomes
   //   TODO: repurpose assignHomes/Ref to do this, but pass in homes instead of locals
   //   Best way to do this is to rewrite assignHomes to use homes, and preprocess locals to do that, then test with existing tests
   for (const [_, block] of p.blocks) {
-    allocateRegisterBlock(block)
+    allocateRegisterBlock(block, p.info.conflicts, p.info.homes)
   }
-  return assignHomes(p)
+  assignHomes(p)
 }
 
-function allocateRegisterBlock(b: Block): void {
+function allocateRegisterBlock(b: Block, conflicts: Graph<string>, homes: Map<string, Reg | Deref>): void {
   // get vertices = variables + registers (I think there is a list NOT in the conflicts graph)
   //   NOTE: conflicts doesn't include everything, but it does include everything that will be used in the algorithm, so it's good enough
   // TODO: It also includes registers, which doesn't make sense; there's got to be a better starting point.
-  const vertices = new Set(b.info.conflicts.g.keys())
+  const vertices = new Set(conflicts.g.keys())
   // initialise mapping with variables, unset and registers, set to their mapping
   //  (you can build the saturation list dynamically even though it's inefficient; it's just the assignments of the neighbours)
   //  that's why the value type isn't a tuple
@@ -255,10 +250,10 @@ function allocateRegisterBlock(b: Block): void {
   }
   // run DSATUR what a name
   while (vertices.size) {
-    const u = maxBy(vertices, v => (colour.get(v) === undefined ? saturation(b.info.conflicts.g.get(v)!) : 0))
+    const u = maxBy(vertices, v => (colour.get(v) === undefined ? saturation(conflicts.g.get(v)!) : 0))
     if (!u) break
     let c = 0
-    for (const n of Array.from(b.info.conflicts.g.get(u)!)
+    for (const n of Array.from(conflicts.g.get(u)!)
       .map(n => colour.get(n))
       .toSorted()) {
       if (n === undefined) break // quick exit; done with the already-assigned neighbours
@@ -268,11 +263,9 @@ function allocateRegisterBlock(b: Block): void {
     vertices.delete(u)
   }
   // compose mapping of variable/register->number and number->register/stack to get variable/register->register/stack
-  const homes: Map<string, Reg | Deref> = new Map()
   for (const [varreg, c] of colour) {
     homes.set(varreg, c in registers ? Reg(registers[c]) : Deref("rbp", -8 * c))
   }
-  b.info.homes = homes
 
   function maxBy<T>(it: Iterable<T>, f: (t: T) => number): T | undefined {
     let best: T | undefined
@@ -294,16 +287,15 @@ function allocateRegisterBlock(b: Block): void {
     return n
   }
 }
-function assignHomes(p: X86Program): X86Program {
+function assignHomes(p: X86Program): void {
   for (const [name, block] of p.blocks) {
-    p.blocks.set(name, assignHomesBlock(block))
+    p.blocks.set(name, assignHomesBlock(block, p.info.homes))
   }
-  return p
 }
-function assignHomesBlock(block: Block): Block {
+function assignHomesBlock(block: Block, homes: Map<string, Reg | Deref>): Block {
   return Block(
     block.info,
-    block.instructions.map(i => assignHomesInstr(block.info.homes, i))
+    block.instructions.map(i => assignHomesInstr(homes, i))
   )
 }
 function assignHomesInstr(info: Map<string, Deref | Reg>, i: Instr): Instr {

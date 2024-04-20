@@ -87,15 +87,16 @@ export type Instr =
   | { kind: "jmp"; label: string }
   | { kind: "jmpif"; cc: Cc; label: string }
 export type X86Program = {
-  info: Map<string, number>
+  info: {
+    homes: Map<string, Reg | Deref>
+    conflicts: Graph<string>
+  }
   blocks: Map<string, Block>
 }
 export type Block = {
   kind: "block"
   info: {
-    homes: Map<string, Reg | Deref>
     references: Array<Set<string>>
-    conflicts: Graph<string>
   }
   instructions: Instr[]
 }
@@ -144,7 +145,13 @@ export function Jmp(label: string): Instr {
 export function JmpIf(cc: Cc, label: string): Instr {
   return { kind: "jmpif", cc, label }
 }
-export function X86Program(info: Map<string, number>, blocks: Map<string, Block>): X86Program {
+export function X86Program(
+  info: {
+    homes: Map<string, Reg | Deref>
+    conflicts: Graph<string>
+  },
+  blocks: Map<string, Block>
+): X86Program {
   return { info, blocks }
 }
 export function Block(info: Block["info"], instructions: Instr[]): Block {

@@ -51,12 +51,15 @@ function bind(blocks: [string, Stmt][]): Map<string, number> {
 }
 export function selectInstructions(p: CProgram): X86Program {
   const ret: X86Program = {
-    info: new Map(),
+    info: {
+      homes: new Map(),
+      conflicts: new Graph()
+    },
     blocks: new Map([]),
   }
   for (const [name, stmt] of p.body) {
     const instructions = selectInstructionsStmt(stmt)
-    ret.blocks.set(name, Block({ homes: new Map(), references: [], conflicts: new Graph() }, instructions))
+    ret.blocks.set(name, Block({ references: [] }, instructions))
   }
   return ret
 }
