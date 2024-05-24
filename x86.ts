@@ -45,9 +45,7 @@ registers[-2] = "rsp"
 registers[-3] = "rbp"
 registers[-4] = "r11"
 registers[-5] = "r15"
-export function emitPreludeConclusion(p: X86Program): X86Program {
-  const start = assertDefined(p.blocks.get("start"))
-  start.instructions.push({ kind: "jmp", label: "conclusion" })
+export function emitPreludeConclusion(p: X86Program): void {
   const stackSize = frameStackSize(p.info.homes)
   p.blocks.set(
     "main",
@@ -62,7 +60,6 @@ export function emitPreludeConclusion(p: X86Program): X86Program {
     "conclusion",
     Block({ references: [] }, [Instr("addq", Imm(stackSize), Reg("rsp")), Instr("popq", Reg("rbp")), Ret()])
   )
-  return p
 }
 export function patchInstructions(p: X86Program): void {
   for (const [name, block] of p.blocks) {
@@ -73,12 +70,22 @@ function patchInstructionsInstr(i: Instr): Instr[] {
   switch (i.kind) {
     case "instr":
       if (i.op === "set") {
-        throw new Error("don't know how to patchInstructionsInstr for set yet")
+        return [i]
       }
       if (i.args.length === 2 && i.args[0].kind === "deref" && i.args[1].kind === "deref") {
         return [
           Instr("movq", i.args[0], { kind: "reg", reg: "rax" }),
           Instr(i.op, { kind: "reg", reg: "rax" }, i.args[1]),
+        ]
+      } else if (i.op === "cmpq" && i.args[1].kind === "imm") {
+        return [
+          Instr("movq", i.args[1], { kind: "reg", reg: "rax" }),
+          Instr("cmpq", i.args[0], { kind: "reg", reg: "rax" }),
+        ]
+      } else if (i.op === "movzbq" && i.args[1].kind !== "reg") {
+        return [
+          Instr("movq", i.args[1], { kind: "reg", reg: "rax" }),
+          Instr("movzbq", i.args[0], { kind: "reg", reg: "rax" }),
         ]
       } else if (i.op === "movq" && i.args.length === 2 && equalRef(i.args[0], i.args[1])) {
         return []
@@ -87,9 +94,8 @@ function patchInstructionsInstr(i: Instr): Instr[] {
     case "callq":
     case "ret":
     case "jmp":
-      return [i]
     case "jmpif":
-      throw new Error("don't know how to patchInstructionsInstr for jmpif yet")
+      return [i]
   }
 }
 export function buildInterference(p: X86Program): void {
