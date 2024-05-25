@@ -1,5 +1,5 @@
-import { assertDefined, zip, unzip } from "./core.js"
-import { Exp, Prim, Var, Program, Let, Stmt, Assign, Seq, Return, If, Bool } from "./factory.js"
+import { assertDefined, zip, unzip, Box, box, setBox, unbox } from "./core.js"
+import { Exp, Prim, Var, Program, Let, If, Bool, SetBang, Begin, While } from "./factory.js"
 import parse from "./parser.js"
 import { AList } from "./structures.js"
 import { read } from "./core.js"
@@ -8,24 +8,41 @@ function gensym() {
   return "g" + counter++
 }
 /* ### Interpreter ### */
-export function interpExp(e: Exp, env: AList<string, number>): number {
+export function interpExp(e: Exp, env: AList<string, Box>): number {
   switch (e.kind) {
     case "int":
       return e.val
     case "bool":
       return e.val ? 1 : 0
     case "var": {
-      return assertDefined(env.get(e.name))
+      return unbox(assertDefined(env.get(e.name)))
     }
     case "let":
-      return interpExp(e.body, new AList(e.name, interpExp(e.exp, env), env))
+      return interpExp(e.body, new AList(e.name, box(interpExp(e.exp, env)), env))
+    case "set":
+      setBox(assertDefined(env.get(e.name)), interpExp(e.exp, env))
+      return NaN
+    case "begin":
+      for (const exp of e.exps) {
+        if (!isNaN(interpExp(exp, env))) {
+          throw new Error("Expected expression to have type void, but it returned a value.")
+        }
+      }
+      return interpExp(e.body, env)
+    case "while":
+      while (interpExp(e.cond, env)) {
+        interpExp(e.body, env)
+      }
+      return NaN
+    case "void":
+      return NaN
     case "prim":
       return interpPrim(e, env)
     case "if":
       return interpExp(e.cond, env) === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
   }
 }
-function interpPrim(e: Prim, env: AList<string, number>): number {
+function interpPrim(e: Prim, env: AList<string, Box>): number {
   if (e.op === "read") return +read()
   if (e.op === "+") return interpExp(e.args[0], env) + interpExp(e.args[1], env)
   if (e.op === "-" && e.args.length === 1) return -interpExp(e.args[0], env)
@@ -41,7 +58,7 @@ function interpPrim(e: Prim, env: AList<string, number>): number {
   return NaN
 }
 export function interpProgram(p: Program): number {
-  return interpExp(p.body, new AList("!!!!!!", NaN, undefined))
+  return interpExp(p.body, new AList("!!!!!!", box(NaN), undefined))
 }
 
 export function parseProgram(sexp: string): Program {
@@ -52,6 +69,7 @@ export function parseProgram(sexp: string): Program {
 type Type = symbol
 const intType = Symbol("Integer")
 const boolType = Symbol("Boolean")
+const voidType = Symbol("Void")
 const operatorTypes = new Map<string, [[...Type[]], Type]>([
   ["+", [[intType, intType], intType]],
   ["-", [[intType, intType], intType]],
@@ -108,6 +126,29 @@ function typeCheckExp(e: Exp, env: AList<string, Type>): [Exp, Type] {
       const [body, tbody] = typeCheckExp(e.body, new AList(e.name, te, env))
       return [Let(e.name, exp, body), tbody]
     }
+    case "set":
+      const [exp, te] = typeCheckExp(e.exp, env)
+      assertTypeEqual(te, assertDefined(env.get(e.name)), e)
+      return [SetBang(e.name, exp), voidType]
+    case "begin": {
+      const exps = []
+      for (const exp of e.exps) {
+        const [expp, expt] = typeCheckExp(exp, env)
+        assertTypeEqual(expt, voidType, exp)
+        exps.push(expp)
+      }
+      const [body, tbody] = typeCheckExp(e.body, env)
+      return [Begin(exps, body), tbody]
+    }
+    case "while": {
+      const [cond, tcond] = typeCheckExp(e.cond, env)
+      const [body, tbody] = typeCheckExp(e.body, env)
+      assertTypeEqual(tcond, boolType, e.cond)
+      assertTypeEqual(tbody, voidType, e.body)
+      return [While(cond, body), voidType]
+    }
+    case "void":
+      return [e, voidType]
     case "if": {
       const [cond, t1] = typeCheckExp(e.cond, env)
       const [then, t2] = typeCheckExp(e.then, env)
@@ -146,6 +187,14 @@ export function emitExp(e: Exp): string {
       return e.name
     case "let":
       return `(let (${e.name} ${emitExp(e.exp)}) ${emitExp(e.body)})`
+    case "set":
+      return `(set! ${e.name} ${emitExp(e.exp)})`
+    case "begin":
+      return `(begin ${e.exps.map(emitExp).join(" ")} ${emitExp(e.body)})`
+    case "while":
+      return `(while ${emitExp(e.cond)} ${emitExp(e.body)})`
+    case "void":
+      return `(void)`
     case "if":
       return `[if ${emitExp(e.cond)} ${emitExp(e.then)} ${emitExp(e.else)}]`
   }
@@ -156,6 +205,8 @@ export function emitType(t: Type): string {
       return "int"
     case boolType:
       return "bool"
+    case voidType:
+      return "void"
   }
   throw new Error(`Unexpected type ${t.toString()}`)
 }
@@ -187,6 +238,14 @@ function reparsePrimitivesExp(e: Exp): Exp {
       return e
     case "let":
       return Let(e.name, reparsePrimitivesExp(e.exp), reparsePrimitivesExp(e.body))
+    case "set":
+      return SetBang(e.name, reparsePrimitivesExp(e.exp))
+    case "begin":
+      return Begin(e.exps.map(reparsePrimitivesExp), reparsePrimitivesExp(e.body))
+    case "while":
+      return While(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.body))
+    case "void":
+      return e
     case "if":
       return If(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.then), reparsePrimitivesExp(e.else))
   }
@@ -219,6 +278,11 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "let": {
       return Let(e.name, removeComplexOperandsExp(e.exp), removeComplexOperandsExp(e.body))
     }
+    case "set":
+    case "begin":
+    case "while":
+    case "void":
+      throw new Error("Don't know how to remove complex operands for set/begin/while/void")
   }
 }
 function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
@@ -263,6 +327,11 @@ function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
       const tmp = gensym()
       return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
     }
+    case "set":
+    case "begin":
+    case "while":
+    case "void":
+      throw new Error("Don't know how to remove complex operands (atom) for set/begin/while/void")
   }
 }
 
@@ -285,6 +354,11 @@ function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
       env = new AList(e.name, x, env)
       return Let(x, uniquifyExp(e.exp, env), uniquifyExp(e.body, env))
     }
+    case "set":
+    case "begin":
+    case "while":
+    case "void":
+      throw new Error("Don't know how to remove uniquify exp for set/begin/while/void")
   }
 }
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {

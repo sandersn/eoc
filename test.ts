@@ -28,10 +28,18 @@ function runExplicateControl(sexp: string) {
   console.log(c.emitProgram(p))
   return c.interpProgram(p)
 }
-function runAssignHomes(program: Program, verbose = false) {
+type Stage = "l" | "c" | "x"
+function runAssignHomes(program: Program, stage: Stage, verbose = false) {
   const parsedProgram = l.typeCheckProgram(program)
+  if (stage === "l") {
+    if (verbose) console.log(l.emitProgram(parsedProgram))
+    return l.interpProgram(parsedProgram)
+  }
   const p = explicateControl(removeComplexOperands(uniquifyProgram(parsedProgram)))
-  if (verbose) console.log(c.emitProgram(p))
+  if (stage === "c") {
+    if (verbose) console.log(c.emitProgram(p))
+    return c.interpProgram(p)
+  }
   let xp = selectInstructions(p)
   uncoverLive(xp)
   buildInterference(xp)
@@ -40,17 +48,12 @@ function runAssignHomes(program: Program, verbose = false) {
   emitPreludeConclusion(xp)
   if (verbose) console.log(x.emitProgram(xp))
   return x.interpProgram(xp)
-  // const xp = emitPreludeConclusion(patchInstructions(allocateRegisters(initial)))
-  // console.log(x.emitProgram(xp))
-  // console.log(xp.blocks.get("start")!.info.references)
-  // console.log(xp.blocks.get("start")!.info.conflicts)
-  // return x.interpProgram(xp)
 }
-function testLvar(name: string, sexp: string, verbose = false) {
+function testLvar(name: string, sexp: string, stage: Stage = "l", verbose = false) {
   const program = reparsePrimitives(parseProgram(sexp))
   const expected = runLvar(program)
   console.log("\t", l.emitProgram(program), "-->", expected)
-  test(name, runAssignHomes(program, verbose), expected)
+  test(name, runAssignHomes(program, stage, verbose), expected)
 }
 test("test list basic", runLvar(parseProgram("(+ 1 2)")), 3)
 test("test lint basic", runLvar(parseProgram("(+ (+ 3 4) 12))")), 19)
@@ -77,7 +80,7 @@ testLvar(">=", "(let (x 1) (let (y (>= x 1)) 1))")
 testLvar("<=", "(let (x 1) (let (y (<= x 1)) 1))")
 testLvar("if-boolean", "(let (x #t) (let (y #f) (if x 4 3)))")
 testLvar("if", "(let (x #t) (let (y #f) (if x 1 2)))")
-testLvar("if-or", "(let (x #t) (let (y #f) (if (or y x) 3 4)))", true)
+testLvar("if-or", "(let (x #t) (let (y #f) (if (or y x) 3 4)))")
 testLvar("if-and", "(let (x #t) (let (y #f) (if (and x y) 1 (let (x 12) (let (y 13) (+ x y))))))")
 testLvar("if-and-or", "(let (x #t) (let (y #f) (if (and (or x x) y) 1 (let (z (or x y)) 14))))")
 testLvar("andlet", "(let (x #t) (let (y #f) (if (and (let (x #f) (or x #t)) y) 1 (let (z (or x y)) 14))))")

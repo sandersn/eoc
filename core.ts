@@ -21,6 +21,16 @@ export function zip<T, U>(ts: T[], us: U[]): Array<[T, U]> {
   }
   return tus
 }
+export type Box = { ref: number }
+export function box(value: number): Box {
+  return { ref: value }
+}
+export function unbox(box: Box): number {
+  return box.ref
+}
+export function setBox(box: Box, value: number): void {
+  box.ref = value
+}
 /** Read a number from stdin
  * use readline something something can't be bothered
  * TODO: Better for testing: use a counter or a random number generator with a seed

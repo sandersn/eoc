@@ -102,4 +102,12 @@ export class AList<K, V> {
     assert(alist)
     return alist
   }
+  static fromMapMap<K, V, V2>(m: Map<K, V>, f: (v: V) => V2): AList<K, V2> {
+    let alist: AList<K, V2> | undefined = undefined
+    for (const [k, v] of m) {
+      alist = new AList(k, f(v), alist)
+    }
+    assert(alist)
+    return alist
+  }
 }

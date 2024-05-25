@@ -1,4 +1,4 @@
-import { assertDefined } from "./core.js"
+import { assertDefined, box } from "./core.js"
 import {
   Assign,
   Var,
@@ -53,7 +53,7 @@ export function selectInstructions(p: CProgram): X86Program {
   const ret: X86Program = {
     info: {
       homes: new Map(),
-      conflicts: new Graph()
+      conflicts: new Graph(),
     },
     blocks: new Map([]),
   }
@@ -76,6 +76,11 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
     case "if":
     case "let":
       throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
+    case "set":
+    case "begin":
+    case "while":
+    case "void":
+      throw new Error("Don't know how to select instructions exp for set/begin/while/void")
   }
 }
 function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
@@ -162,12 +167,17 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "if":
     case "let":
       throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
+    case "set":
+    case "begin":
+    case "while":
+    case "void":
+      throw new Error("Don't know how to select instructions atom for set/begin/while/void")
   }
 }
 export function interpProgram(p: CProgram): number {
   return interpStatement(assertDefined(p.body.get("start")))
   function interpStatement(e: Stmt): number {
-    const env2 = AList.fromMap(p.locals)
+    const env2 = AList.fromMapMap(p.locals, box)
     switch (e.kind) {
       case "assign": {
         const v = interpExp(e.exp, env2)
@@ -227,6 +237,11 @@ export function explicateControl(p: Program): CProgram {
       case "let": {
         return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
       }
+      case "set":
+      case "begin":
+      case "while":
+      case "void":
+        throw new Error("Don't know how to explicate control for set/begin/while/void")
     }
   }
   function explicateTail(e: Exp): Stmt {
@@ -252,6 +267,11 @@ export function explicateControl(p: Program): CProgram {
             throw new Error("Unexpected assign")
         }
       }
+      case "set":
+      case "begin":
+      case "while":
+      case "void":
+        throw new Error("Don't know how to explicate tail for set/begin/while/void")
     }
   }
   function createBlock(k: Stmt): Goto {
@@ -290,6 +310,11 @@ export function explicateControl(p: Program): CProgram {
         return explicatePred(cond.cond, explicatePred(cond.then, then, else_), explicatePred(cond.else, then, else_))
       case "let":
         return explicateAssign(cond.exp, cond.name, explicatePred(cond.body, then, else_))
+      case "set":
+      case "begin":
+      case "while":
+      case "void":
+        throw new Error("Don't know how to explicate pred for set/begin/while/void")
     }
   }
 }
