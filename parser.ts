@@ -1,9 +1,13 @@
 import assert from "node:assert"
-import { Int, Bool, type Exp, Let, Var, Prim } from "./factory.js"
+import { Int, Bool, type Exp, Let, Var, Prim, SetBang, Begin, While, Void } from "./factory.js"
 enum Token {
   LParen,
   RParen,
   Let,
+  Set,
+  Begin,
+  While,
+  Void, // TODO: Maybe this should be a function call
   Identifier,
   True,
   False,
@@ -16,6 +20,13 @@ enum Token {
   Lte,
   EqEq,
   EOF,
+}
+const keywords = {
+  let: Token.Let,
+  set: Token.Set,
+  begin: Token.Begin,
+  while: Token.While,
+  void: Token.Void,
 }
 function lex(s: string) {
   let i = 0
@@ -34,7 +45,7 @@ function lex(s: string) {
   return {
     pos: () => i,
     next: () => {
-      while (s[i] === " ") i++
+      while (s[i] === " " || s[i] === "\n") i++
       switch (s[i]) {
         case "(":
           i++
@@ -50,18 +61,13 @@ function lex(s: string) {
           i++
           value = "-"
           return Token.Minus
-        case "l":
-          if (i + 2 < s.length && s[i + 1] === "e" && s[i + 2] === "t") {
-            i += 3
-            return Token.Let
-          }
         case "<":
-          return nextChar("=", Token.Lte, '<=', Token.Lt, '<')
+          return nextChar("=", Token.Lte, "<=", Token.Lt, "<")
         case ">":
-          return nextChar("=", Token.Gte, '>=', Token.Gt, '>')
+          return nextChar("=", Token.Gte, ">=", Token.Gt, ">")
         case "=":
           // TODO: fallback should be Eq once assignment is supported
-          return nextChar("=", Token.EqEq, '==', Token.EOF, '=')
+          return nextChar("=", Token.EqEq, "==", Token.EOF, "=")
         case "#":
           if (i + 1 < s.length && (s[i + 1] === "t" || s[i + 1] === "f")) {
             const token = s[i + 1] === "t" ? Token.True : Token.False
@@ -80,7 +86,7 @@ function lex(s: string) {
             let j = i
             while (s[i] >= "a" && s[i] <= "z") i++
             value = s.slice(j, i)
-            return Token.Identifier
+            return keywords[value as keyof typeof keywords] ?? Token.Identifier
           }
       }
       return Token.EOF
@@ -98,18 +104,27 @@ export default function parse(sexp: string) {
       case Token.False:
         return Bool(t === Token.True)
       case Token.LParen: {
-        const head = lexer.next()
-        if (head === Token.Let) {
-          return parseLet()
-        } else {
-          const op = lexer.value()
-          const args: Exp[] = []
-          t = lexer.next()
-          while (t !== Token.RParen) {
-            args.push(parseExp(t))
+        switch (lexer.next()) {
+          case Token.Let:
+            return parseLet()
+          case Token.Set:
+            return parseSet()
+          case Token.Begin:
+            return parseBegin()
+          case Token.While:
+            return parseWhile()
+          case Token.Void:
+            return parseVoid()
+          default: {
+            const op = lexer.value()
+            const args: Exp[] = []
             t = lexer.next()
+            while (t !== Token.RParen) {
+              args.push(parseExp(t))
+              t = lexer.next()
+            }
+            return Prim(op, ...args)
           }
-          return Prim(op, ...args)
         }
       }
       case Token.Identifier:
@@ -127,6 +142,36 @@ export default function parse(sexp: string) {
     const body = parseExp(lexer.next())
     assert(lexer.next() === Token.RParen)
     return Let(name, exp, body)
+  }
+  function parseSet(): Exp {
+    assert(lexer.next() === Token.Identifier)
+    const name = lexer.value()
+    const exp = parseExp(lexer.next())
+    assert(lexer.next() === Token.RParen)
+    return SetBang(name, exp)
+  }
+  function parseBegin(): Exp {
+    const exps = []
+    let last = parseExp(lexer.next())
+    let t = lexer.next()
+    // TODO: Test that this works with a single-entry `begin`
+    while (t !== Token.RParen) {
+      exps.push(last)
+      last = parseExp(t)
+      t = lexer.next()
+    }
+    //assert(lexer.next() === Token.RParen)
+    return Begin(exps, last)
+  }
+  function parseWhile(): Exp {
+    const cond = parseExp(lexer.next())
+    const exp = parseExp(lexer.next())
+    assert(lexer.next() === Token.RParen)
+    return While(cond, exp)
+  }
+  function parseVoid(): Exp {
+    assert(lexer.next() === Token.RParen)
+    return Void()
   }
   return parseExp(lexer.next())
 }

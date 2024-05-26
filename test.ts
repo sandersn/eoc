@@ -55,6 +55,18 @@ function testLvar(name: string, sexp: string, stage: Stage = "l", verbose = fals
   console.log("\t", l.emitProgram(program), "-->", expected)
   test(name, runAssignHomes(program, stage, verbose), expected)
 }
+testLvar("single-begin", "(begin (+ 1 1))")
+testLvar(
+  "while-example",
+  `(let (sum 0) 
+    (let (i 5) 
+      (begin 
+        (while (> i 0) 
+          (begin 
+            (set sum (+ sum i)) 
+            (set i (- i 1))))
+        sum)))`
+)
 test("test list basic", runLvar(parseProgram("(+ 1 2)")), 3)
 test("test lint basic", runLvar(parseProgram("(+ (+ 3 4) 12))")), 19)
 test("test lvar basic", runLvar(parseProgram("(let (y (+ 1 2)) y)")), 3)
@@ -91,5 +103,6 @@ testLvar("if-<", "(let (x 1) (let (y 2) (if (< x y) 1 0)))")
 testLvar("if->", "(let (x 1) (let (y 2) (if (> x y) 1 0)))")
 testLvar("if-==", "(let (x 1) (if (== x 2) 1 0))")
 // TODO: Function to test type checking failure
+// TODO: Test get/set unbound things
 // testLvar("not-bad", "(let (x #t) (let (y #f) (if (not x) (not y) 2)))")
 // testLvar("not-bad2", "(let (x #t) (let (y #f) (if (not x) (not y) (not 2))))")
