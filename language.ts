@@ -1,5 +1,5 @@
 import { assertDefined, zip, unzip, Box, box, setBox, unbox } from "./core.js"
-import { Exp, Prim, Var, Program, Let, If, Bool, SetBang, Begin, While } from "./factory.js"
+import { Exp, Prim, Var, Program, Let, If, Bool, SetBang, Begin, While, GetBang } from "./factory.js"
 import parse from "./parser.js"
 import { AList } from "./structures.js"
 import { read } from "./core.js"
@@ -14,6 +14,8 @@ export function interpExp(e: Exp, env: AList<string, Box>): number {
       return e.val
     case "bool":
       return e.val ? 1 : 0
+    case "get":
+      throw new Error("Do not interpret post uncoverGet ASTs.")
     case "var": {
       return unbox(assertDefined(env.get(e.name)))
     }
@@ -119,6 +121,8 @@ function typeCheckExp(e: Exp, env: AList<string, Type>): [Exp, Type] {
       const [args, ts] = unzip(e.args.map(arg => typeCheckExp(arg, env)))
       return [Prim(e.op, ...args), typeCheckOp(e.op, ts, e)]
     }
+    case "get":
+      throw new Error("Do no type check post-uncoverGet ASTs.")
     case "var":
       return [e, assertDefined(env.get(e.name))]
     case "let": {
@@ -185,10 +189,12 @@ export function emitExp(e: Exp): string {
       return `(${e.op} ${e.args.map(a => emitExp(a)).join(" ")})`
     case "var":
       return e.name
+    case "get":
+      return `[get ${e.name}]`
     case "let":
       return `(let (${e.name} ${emitExp(e.exp)}) ${emitExp(e.body)})`
     case "set":
-      return `(set! ${e.name} ${emitExp(e.exp)})`
+      return `(set ${e.name} ${emitExp(e.exp)})`
     case "begin":
       return `(begin ${e.exps.map(emitExp).join(" ")} ${emitExp(e.body)})`
     case "while":
@@ -212,9 +218,9 @@ export function emitType(t: Type): string {
 }
 /* ### Frontend passes ###
  * 1. reparsePrimitives
- * 2. removeComplexOperands
- * 3. uniquify
- * 4. explicateTail -- produces a C program, called from c.ts (and maybe should be there)
+ * 2. uniquify
+ * 3. uncoverGet
+ * 4. removeComplexOperands
  */
 /** Convert primitive nodes to ifs and calls as needed */
 export function reparsePrimitives(p: Program): Program {
@@ -233,6 +239,7 @@ function reparsePrimitivesExp(e: Exp): Exp {
       return Prim(e.op, ...e.args.map(reparsePrimitivesExp))
     // TODO: Later, if e.op not in primitive list, then create a Call
     case "var":
+    case "get":
     case "int":
     case "bool":
       return e
@@ -248,6 +255,105 @@ function reparsePrimitivesExp(e: Exp): Exp {
       return e
     case "if":
       return If(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.then), reparsePrimitivesExp(e.else))
+  }
+}
+
+export function uniquifyProgram(p: Program): Program {
+  return Program(p.info, uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)))
+}
+function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
+  switch (e.kind) {
+    case "var":
+      return Var(assertDefined(env.get(e.name)))
+    case "get":
+      throw new Error("Run uniquify before uncoverGet")
+    case "int":
+    case "bool":
+      return e
+    case "prim":
+      return Prim(e.op, ...e.args.map(a => uniquifyExp(a, env)))
+    case "if":
+      return If(uniquifyExp(e.cond, env), uniquifyExp(e.then, env), uniquifyExp(e.else, env))
+    case "let": {
+      let x = env.get(e.name) ? gensym() : e.name
+      env = new AList(e.name, x, env)
+      return Let(x, uniquifyExp(e.exp, env), uniquifyExp(e.body, env))
+    }
+    case "set":
+      return SetBang(e.name, uniquifyExp(e.exp, env))
+    case "begin":
+      return Begin(e.exps.map(exp => uniquifyExp(exp, env)), uniquifyExp(e.body, env))
+    case "while":
+      return While(uniquifyExp(e.cond, env), uniquifyExp(e.body, env))
+    case "void":
+      return e}
+}
+
+export function uncoverGet(p: Program): Program {
+  const sets = collectSet(p.body)
+  return Program(p.info, uncoverGetExp(p.body))
+
+  function uncoverGetExp(e: Exp): Exp {
+    switch (e.kind) {
+      case "prim":
+        return Prim(e.op, ...e.args.map(uncoverGetExp))
+      case "var":
+        return sets.has(e.name) ? GetBang(e.name) : e
+      case "get":
+      case "int":
+      case "bool":
+      case "void":
+        return e
+      case "if":
+        return If(uncoverGetExp(e.cond), uncoverGetExp(e.then), uncoverGetExp(e.else))
+      case "let":
+        return Let(e.name, uncoverGetExp(e.exp), uncoverGetExp(e.body))
+      case "set":
+        return SetBang(e.name, uncoverGetExp(e.exp))
+      case "begin":
+        return Begin(e.exps.map(uncoverGetExp), uncoverGetExp(e.body))
+      case "while":
+        return While(uncoverGetExp(e.cond), uncoverGetExp(e.body))
+    }
+  }
+}
+function collectSet(e: Exp): Set<string> {
+  const sets: Set<string> = new Set()
+  collectSetExp(e)
+  return sets
+
+  function collectSetExp(e: Exp): void {
+    switch (e.kind) {
+      case "prim":
+        for (const arg of e.args) collectSetExp(arg)
+        return
+      case "var":
+      case "get":
+      case "int":
+      case "bool":
+      case "void":
+        return
+      case "if":
+        collectSetExp(e.cond)
+        collectSetExp(e.then)
+        collectSetExp(e.else)
+        return
+      case "let":
+        collectSetExp(e.exp)
+        collectSetExp(e.body)
+        return
+      case "set":
+        sets.add(e.name)
+        collectSetExp(e.exp)
+        return
+      case "begin":
+        for (const exp of e.exps) collectSetExp(exp)
+        collectSetExp(e.body)
+        return
+      case "while":
+        collectSetExp(e.cond)
+        collectSetExp(e.body)
+    }
   }
 }
 
@@ -279,6 +385,7 @@ function removeComplexOperandsExp(e: Exp): Exp {
       return Let(e.name, removeComplexOperandsExp(e.exp), removeComplexOperandsExp(e.body))
     }
     case "set":
+    case "get":
     case "begin":
     case "while":
     case "void":
@@ -328,37 +435,11 @@ function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
       return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
     }
     case "set":
+    case "get":
     case "begin":
     case "while":
     case "void":
       throw new Error("Don't know how to remove complex operands (atom) for set/begin/while/void")
-  }
-}
-
-export function uniquifyProgram(p: Program): Program {
-  return Program(p.info, uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)))
-}
-function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
-  switch (e.kind) {
-    case "var":
-      return Var(assertDefined(env.get(e.name)))
-    case "int":
-    case "bool":
-      return e
-    case "prim":
-      return Prim(e.op, ...e.args.map(a => uniquifyExp(a, env)))
-    case "if":
-      return If(uniquifyExp(e.cond, env), uniquifyExp(e.then, env), uniquifyExp(e.else, env))
-    case "let": {
-      let x = env.get(e.name) ? gensym() : e.name
-      env = new AList(e.name, x, env)
-      return Let(x, uniquifyExp(e.exp, env), uniquifyExp(e.body, env))
-    }
-    case "set":
-    case "begin":
-    case "while":
-    case "void":
-      throw new Error("Don't know how to remove uniquify exp for set/begin/while/void")
   }
 }
 function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {

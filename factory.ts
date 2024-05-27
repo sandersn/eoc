@@ -8,10 +8,11 @@ export type Int = { kind: "int"; val: number }
 export type Bool = { kind: "bool"; val: boolean }
 export type Let = { kind: "let"; name: string; exp: Exp; body: Exp }
 export type SetBang = { kind: "set"; name: string; exp: Exp }
+export type GetBang = { kind: "get"; name: string; }
 export type Begin = { kind: "begin"; exps: Exp[]; body: Exp }
 export type While = { kind: "while"; cond: Exp; body: Exp }
 export type Void = { kind: "void" }
-export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | Begin | While | Void
+export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void
 export type Program = {
   kind: "program"
   info: AList<string, number>
@@ -40,6 +41,9 @@ export function Let(name: string, exp: Exp, body: Exp): Let {
 }
 export function SetBang(name: string, exp: Exp): SetBang {
   return { kind: "set", name, exp }
+}
+export function GetBang(name: string): GetBang {
+  return { kind: "get", name }
 }
 export function Begin(exps: Exp[], body: Exp): Begin {
   return { kind: "begin", exps, body }

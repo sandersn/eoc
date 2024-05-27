@@ -49,6 +49,11 @@ function bind(blocks: [string, Stmt][]): Map<string, number> {
   for (const [_, stmt] of blocks) worker(stmt)
   return env
 }
+/**
+ * ### IL stages ###
+ * 1. explicateTail -- produces a C program from a Language program
+ * 2. selectInstructions -- produces an x86-var program from a C program
+ */
 export function selectInstructions(p: CProgram): X86Program {
   const ret: X86Program = {
     info: {
@@ -77,6 +82,7 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
     case "let":
       throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
     case "set":
+    case "get":
     case "begin":
     case "while":
     case "void":
@@ -168,6 +174,7 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "let":
       throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
     case "set":
+    case "get":
     case "begin":
     case "while":
     case "void":
@@ -238,6 +245,7 @@ export function explicateControl(p: Program): CProgram {
         return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
       }
       case "set":
+      case "get":
       case "begin":
       case "while":
       case "void":
@@ -268,6 +276,7 @@ export function explicateControl(p: Program): CProgram {
         }
       }
       case "set":
+      case "get":
       case "begin":
       case "while":
       case "void":
@@ -311,6 +320,7 @@ export function explicateControl(p: Program): CProgram {
       case "let":
         return explicateAssign(cond.exp, cond.name, explicatePred(cond.body, then, else_))
       case "set":
+      case "get":
       case "begin":
       case "while":
       case "void":
