@@ -286,9 +286,8 @@ export function explicateControl(p: Program): CProgram {
         switch (tail.kind) {
           case "seq":
           case "return":
-            return explicateAssign(e.exp, e.name, tail)
           case "goto":
-            throw new Error("Checker should prevent goto from appearing in tail position")
+            return explicateAssign(e.exp, e.name, tail)
           case "if":
             return explicateAssign(e.exp, e.name, explicatePred(tail.cond, tail.then, tail.else))
           case "assign":
