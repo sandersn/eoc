@@ -30,8 +30,8 @@ export class DirectedGraph<T> {
   }
   transpose() {
     const g: [T, T][] = []
-    for (const [v,w] of this.g) {
-      g.push([w,v])
+    for (const [v, w] of this.g) {
+      g.push([w, v])
     }
     this.g = g
   }
@@ -48,13 +48,12 @@ export class DirectedGraph<T> {
         }
       }
     }
-    if (this.g.length)
-      throw new Error("cycle detected: " + JSON.stringify(this.g))
+    if (this.g.length) throw new Error("cycle detected: " + JSON.stringify(this.g))
     return sorted
   }
   delete(v: T, w: T) {
     let i = 0
-    for (const [n,m] of this.g) {
+    for (const [n, m] of this.g) {
       if (n === v && m === w) {
         this.g.splice(i, 1)
         break
@@ -63,51 +62,31 @@ export class DirectedGraph<T> {
     }
   }
   orphans(): T[] {
-    return this.g.map(([n,_]) => n).filter(n => this.isOrphan(n))
+    return this.g.map(([n, _]) => n).filter(n => this.isOrphan(n))
   }
   /** linear, successful is worst case */
   isOrphan(v: T): boolean {
-    return !this.g.find(([_,m]) => v === m)
+    return !this.g.find(([_, m]) => v === m)
   }
   neighbours(v: T): T[] {
-    return this.g.filter(([n,_]) => v === n).map(([_,m]) => m)
+    return this.g.filter(([n, _]) => v === n).map(([_, m]) => m)
   }
 }
-/** Association list, like from Lisp */
-export class AList<K, V> {
-  constructor(
-    public key: K,
-    public value: V,
-    public next?: AList<K, V>,
-  ) {}
-  get(key: K): V | undefined {
-    if (this.key === key) return this.value
-    else if (this.next) return this.next.get(key)
+export type AList<K, V> = { key: K; value: V; next?: AList<K, V> }
+export function alist<K, V>(key: K, value: V, next?: AList<K, V>): AList<K, V> {
+  return { key, value, next }
+}
+export function assoc<K, V>(alist: AList<K, V> | undefined, key: K): V | undefined {
+  while (alist) {
+    if (alist.key === key) return alist.value
+    else alist = alist.next
   }
-  set(key: K, value: V): void {
-    if (this.key === key) this.value = value
-    else if (this.next) this.next.set(key, value)
-    else throw new Error(`Key ${key} not found`)
+  return undefined
+}
+export function alistFromMap<K, V, V2>(m: Map<K, V>, f: (v: V) => V2): AList<K, V2> | undefined {
+  let head: AList<K, V2> | undefined = undefined
+  for (const [k, v] of m) {
+    head = alist(k, f(v), head)
   }
-  toMap(m: Map<K, V>) {
-    m.set(this.key, this.value)
-    if (this.next) this.next.toMap(m)
-    return m
-  }
-  static fromMap<K, V>(m: Map<K, V>): AList<K, V> {
-    let alist: AList<K, V> | undefined = undefined
-    for (const [k, v] of m) {
-      alist = new AList(k, v, alist)
-    }
-    assert(alist)
-    return alist
-  }
-  static fromMapMap<K, V, V2>(m: Map<K, V>, f: (v: V) => V2): AList<K, V2> {
-    let alist: AList<K, V2> | undefined = undefined
-    for (const [k, v] of m) {
-      alist = new AList(k, f(v), alist)
-    }
-    assert(alist)
-    return alist
-  }
+  return head
 }

@@ -13,19 +13,23 @@ export type Begin = { kind: "begin"; exps: Exp[]; body: Exp }
 export type While = { kind: "while"; cond: Exp; body: Exp }
 export type Void = { kind: "void" }
 export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void
+export type Atom = Int | Bool | Var | Void
 export type Program = {
   kind: "program"
-  info: AList<string, number>
+  info?: AList<string, number>
   body: Exp
 }
 
-export function Program(info: AList<string, number>, body: Exp): Program {
+export function Program(info: AList<string, number> | undefined, body: Exp): Program {
   return { kind: "program", info, body }
 }
 export function Prim(op: "==" | ">" | "<" | ">=" | "<=", ...args: Exp[]): Cmp
 export function Prim(op: string, ...args: Exp[]): Prim
 export function Prim(op: string, ...args: Exp[]): Prim {
   return { kind: "prim", op, args }
+}
+export function PrimAtom(op: string, ...args: Atom[]): Prim {
+  return Prim(op, ...args)
 }
 export function Var(name: string): Var {
   return { kind: "var", name }
@@ -65,6 +69,7 @@ export type Stmt =
   | { kind: "seq"; head: Stmt; tail: Stmt }
   | { kind: "return"; exp: Exp }
   | Goto
+  | { kind: "void" }
   | { kind: "if"; cond: Cmp; then: Goto; else: Goto }
 export type CProgram = {
   kind: "cprogram"

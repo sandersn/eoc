@@ -35,7 +35,8 @@ function runAssignHomes(program: Program, stage: Stage, verbose = false) {
     if (verbose) console.log(l.emitProgram(parsedProgram))
     return l.interpProgram(parsedProgram)
   }
-  const p = explicateControl(removeComplexOperands(uncoverGet(uniquifyProgram(parsedProgram))))
+  const p_1 = removeComplexOperands(uncoverGet(uniquifyProgram(parsedProgram)))
+  const p = explicateControl(p_1)
   if (stage === "c") {
     if (verbose) console.log(c.emitProgram(p))
     return c.interpProgram(p)
@@ -56,6 +57,17 @@ function testLvar(name: string, sexp: string, stage: Stage = "c", verbose = fals
   test(name, runAssignHomes(program, stage, verbose), expected)
 }
 testLvar("single-begin", "(begin (+ 1 1))")
+testLvar("set-order-of-operations", "(let (x 2) (+ x (begin (set x 40) x)))")
+testLvar("set-order-of-operations-2", "(let (y 0) (let (x 2) (+ y (+ x (begin (set x 40) x)))))")
+testLvar(
+  "set-begin-oooperations",
+  `(let (x2 10)
+     (let (y3 0) 
+       (+ (+ (begin (set y3 42) x2)
+             (begin (set x2 12) y3))
+          x2)))`
+)
+// TODO: Asserts
 testLvar(
   "while-example",
   `(let (sum 0) 
@@ -65,7 +77,7 @@ testLvar(
           (begin 
             (set sum (+ sum i)) 
             (set i (- i 1))))
-        sum)))`
+        sum)))`, 'c', true
 )
 test("test list basic", runLvar(parseProgram("(+ 1 2)")), 3)
 test("test lint basic", runLvar(parseProgram("(+ (+ 3 4) 12))")), 19)

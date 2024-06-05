@@ -1,14 +1,14 @@
 import { assertDefined, zip, unzip, Box, box, setBox, unbox } from "./core.js"
-import { Exp, Prim, Var, Program, Let, If, Bool, SetBang, Begin, While, GetBang } from "./factory.js"
+import { Exp, Atom, Prim, PrimAtom, Var, Program, Let, If, Bool, SetBang, Begin, While, GetBang } from "./factory.js"
 import parse from "./parser.js"
-import { AList } from "./structures.js"
+import { AList, alist, assoc } from "./structures.js"
 import { read } from "./core.js"
 let counter = 0
 function gensym() {
   return "g" + counter++
 }
 /* ### Interpreter ### */
-export function interpExp(e: Exp, env: AList<string, Box>): number {
+export function interpExp(e: Exp, env: AList<string, Box> | undefined): number {
   switch (e.kind) {
     case "int":
       return e.val
@@ -17,12 +17,12 @@ export function interpExp(e: Exp, env: AList<string, Box>): number {
     case "get":
       throw new Error("Do not interpret post uncoverGet ASTs.")
     case "var": {
-      return unbox(assertDefined(env.get(e.name)))
+      return unbox(assertDefined(assoc(env, e.name)))
     }
     case "let":
-      return interpExp(e.body, new AList(e.name, box(interpExp(e.exp, env)), env))
+      return interpExp(e.body, alist(e.name, box(interpExp(e.exp, env)), env))
     case "set":
-      setBox(assertDefined(env.get(e.name)), interpExp(e.exp, env))
+      setBox(assertDefined(assoc(env, e.name)), interpExp(e.exp, env))
       return NaN
     case "begin":
       for (const exp of e.exps) {
@@ -44,7 +44,7 @@ export function interpExp(e: Exp, env: AList<string, Box>): number {
       return interpExp(e.cond, env) === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
   }
 }
-function interpPrim(e: Prim, env: AList<string, Box>): number {
+function interpPrim(e: Prim, env: AList<string, Box> | undefined): number {
   if (e.op === "read") return +read()
   if (e.op === "+") return interpExp(e.args[0], env) + interpExp(e.args[1], env)
   if (e.op === "-" && e.args.length === 1) return -interpExp(e.args[0], env)
@@ -60,11 +60,11 @@ function interpPrim(e: Prim, env: AList<string, Box>): number {
   return NaN
 }
 export function interpProgram(p: Program): number {
-  return interpExp(p.body, new AList("!!!!!!", box(NaN), undefined))
+  return interpExp(p.body, undefined)
 }
 
 export function parseProgram(sexp: string): Program {
-  return Program(new AList("!!!!!!!!!", NaN, undefined), parse(sexp))
+  return Program(undefined, parse(sexp))
 }
 /* ### Type checker ### */
 /** It's nominal babyyyyyyyyyyyyy */
@@ -95,11 +95,11 @@ function assertTypeEqual(got: Type, expected: Type, e: Exp): void {
 }
 /** I have NO idea why the type checker is allowed to return a modified tree (but in chapter 4 doesn't even use the capability yet). */
 export function typeCheckProgram(p: Program): Program {
-  const [body, t] = typeCheckExp(p.body, new AList("!!!!!!", intType, undefined))
+  const [body, t] = typeCheckExp(p.body, undefined)
   assertTypeEqual(t, intType, p.body)
   return Program(p.info, body)
 }
-function typeCheckExp(e: Exp, env: AList<string, Type>): [Exp, Type] {
+function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type] {
   switch (e.kind) {
     case "int":
       return [e, intType]
@@ -124,15 +124,15 @@ function typeCheckExp(e: Exp, env: AList<string, Type>): [Exp, Type] {
     case "get":
       throw new Error("Do no type check post-uncoverGet ASTs.")
     case "var":
-      return [e, assertDefined(env.get(e.name))]
+      return [e, assertDefined(assoc(env, e.name))]
     case "let": {
       const [exp, te] = typeCheckExp(e.exp, env)
-      const [body, tbody] = typeCheckExp(e.body, new AList(e.name, te, env))
+      const [body, tbody] = typeCheckExp(e.body, alist(e.name, te, env))
       return [Let(e.name, exp, body), tbody]
     }
     case "set":
       const [exp, te] = typeCheckExp(e.exp, env)
-      assertTypeEqual(te, assertDefined(env.get(e.name)), e)
+      assertTypeEqual(te, assertDefined(assoc(env, e.name)), e)
       return [SetBang(e.name, exp), voidType]
     case "begin": {
       const exps = []
@@ -259,12 +259,12 @@ function reparsePrimitivesExp(e: Exp): Exp {
 }
 
 export function uniquifyProgram(p: Program): Program {
-  return Program(p.info, uniquifyExp(p.body, new AList("!!!!!!", "@@@@@@@@@", undefined)))
+  return Program(p.info, uniquifyExp(p.body, undefined))
 }
-function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
+function uniquifyExp(e: Exp, env: AList<string, string> | undefined): Exp {
   switch (e.kind) {
     case "var":
-      return Var(assertDefined(env.get(e.name)))
+      return Var(assertDefined(assoc(env, e.name)))
     case "get":
       throw new Error("Run uniquify before uncoverGet")
     case "int":
@@ -275,18 +275,22 @@ function uniquifyExp(e: Exp, env: AList<string, string>): Exp {
     case "if":
       return If(uniquifyExp(e.cond, env), uniquifyExp(e.then, env), uniquifyExp(e.else, env))
     case "let": {
-      let x = env.get(e.name) ? gensym() : e.name
-      env = new AList(e.name, x, env)
+      let x = assoc(env, e.name) ? gensym() : e.name
+      env = alist(e.name, x, env)
       return Let(x, uniquifyExp(e.exp, env), uniquifyExp(e.body, env))
     }
     case "set":
       return SetBang(e.name, uniquifyExp(e.exp, env))
     case "begin":
-      return Begin(e.exps.map(exp => uniquifyExp(exp, env)), uniquifyExp(e.body, env))
+      return Begin(
+        e.exps.map(exp => uniquifyExp(exp, env)),
+        uniquifyExp(e.body, env)
+      )
     case "while":
       return While(uniquifyExp(e.cond, env), uniquifyExp(e.body, env))
     case "void":
-      return e}
+      return e
+  }
 }
 
 export function uncoverGet(p: Program): Program {
@@ -365,16 +369,17 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "var":
     case "int":
     case "bool":
+    case "void":
       return e
     case "prim": {
       if (e.op === "read") return e
       if (e.args.length === 1) {
-        const [tmp, tmps] = removeComplexOperandsAtom(e.args[0])
-        return generateTmpLets(Prim(e.op, tmp), tmps)
+        const [arg, tmps] = removeComplexOperandsAtom(e.args[0])
+        return generateLets(tmps, PrimAtom(e.op, arg))
       } else if (e.args.length === 2) {
-        const [tmp1, tmps1] = removeComplexOperandsAtom(e.args[0])
-        const [tmp2, tmps2] = removeComplexOperandsAtom(e.args[1])
-        return generateTmpLets(Prim(e.op, tmp1, tmp2), [...tmps1, ...tmps2])
+        const [arg1, tmps1] = removeComplexOperandsAtom(e.args[0])
+        const [arg2, tmps2] = removeComplexOperandsAtom(e.args[1])
+        return generateLets([...tmps2, ...tmps1], PrimAtom(e.op, arg1, arg2))
       } else {
         throw new Error("Unexpected number of arguments")
       }
@@ -384,33 +389,34 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "let": {
       return Let(e.name, removeComplexOperandsExp(e.exp), removeComplexOperandsExp(e.body))
     }
-    case "set":
     case "get":
+      return Var(e.name)
+    case "set":
+      return SetBang(e.name, removeComplexOperandsExp(e.exp))
     case "begin":
+      return Begin(e.exps.map(removeComplexOperandsExp), removeComplexOperandsExp(e.body))
     case "while":
-    case "void":
-      throw new Error("Don't know how to remove complex operands for set/begin/while/void")
+      return While(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.body))
   }
 }
-function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
+function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
   switch (e.kind) {
     case "var":
     case "int":
     case "bool":
+    case "void":
       return [e, []]
     case "prim": {
-      const tmp = gensym()
       if (e.op === "read") {
-        return [Var(tmp), [[tmp, e]]]
+        return generateTmp(e, [])
       }
       if (e.args.length === 1) {
         const [e1, tmps] = removeComplexOperandsAtom(e.args[0])
-        return [Var(tmp), [[tmp, Prim(e.op, e1)], ...tmps]]
+        return generateTmp(PrimAtom(e.op, e1), tmps)
       } else if (e.args.length === 2) {
         const [e1, tmps1] = removeComplexOperandsAtom(e.args[0])
         const [e2, tmps2] = removeComplexOperandsAtom(e.args[1])
-        const tmps = [...tmps1, ...tmps2]
-        return [Var(tmp), [[tmp, Prim(e.op, e1, e2)], ...tmps]]
+        return generateTmp(PrimAtom(e.op, e1, e2), [...tmps2, ...tmps1])
       } else {
         throw new Error("Unexpected number of arguments")
       }
@@ -418,30 +424,33 @@ function removeComplexOperandsAtom(e: Exp): [Exp, Array<[string, Exp]>] {
     case "if":
       // chapter 4 notes that e.cond should *definitely* be an expression, so I'm going to leave all 3
       // as-is and see whether explicateTail will fix things up
-      const tmp = gensym()
-      return [
-        Var(tmp),
-        [
-          [
-            tmp,
-            If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else)),
-          ],
-        ],
-      ]
+      return generateTmp(
+        If(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.then), removeComplexOperandsExp(e.else)),
+        []
+      )
     case "let": {
       const [e1, tmpsE] = removeComplexOperandsAtom(e.exp)
       const [body1, tmpsBody] = removeComplexOperandsAtom(e.body)
-      const tmp = gensym()
-      return [Var(tmp), [[tmp, Let(e.name, e1, generateTmpLets(body1, tmpsBody))], ...tmpsE]]
+      return generateTmp(Let(e.name, e1, generateLets(tmpsBody, body1)), tmpsE)
     }
     case "set":
+      return generateTmp(SetBang(e.name, removeComplexOperandsExp(e.exp)), [])
     case "get":
-    case "begin":
-    case "while":
-    case "void":
-      throw new Error("Don't know how to remove complex operands (atom) for set/begin/while/void")
+      return generateTmp(Var(e.name), [])
+    case "begin": {
+      return generateTmp(Begin(e.exps.map(removeComplexOperandsExp), removeComplexOperandsExp(e.body)), [])
+    }
+    case "while": {
+      const [cond1, tmpsCond] = removeComplexOperandsAtom(e.cond)
+      const [body1, tmpsBody] = removeComplexOperandsAtom(e.body)
+      return generateTmp(While(cond1, body1), [...tmpsCond, ...tmpsBody])
+    }
   }
 }
-function generateTmpLets(init: Exp, tmps: Array<[string, Exp]>): Exp {
-  return tmps.reduce((e, [name, exp]) => Let(name, exp, e), init)
+function generateTmp(e: Exp, tmps: Array<[string, Exp]>): [Atom, Array<[string, Exp]>] {
+  const tmp = gensym()
+  return [Var(tmp), [[tmp, e], ...tmps]]
+}
+function generateLets(tmps: Array<[string, Exp]>, body: Exp): Exp {
+  return tmps.reduce((e, [name, exp]) => Let(name, exp, e), body)
 }
