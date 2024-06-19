@@ -35,8 +35,7 @@ function runAssignHomes(program: Program, stage: Stage, verbose = false) {
     if (verbose) console.log(l.emitProgram(parsedProgram))
     return l.interpProgram(parsedProgram)
   }
-  const p_1 = removeComplexOperands(uncoverGet(uniquifyProgram(parsedProgram)))
-  const p = explicateControl(p_1)
+  const p = explicateControl(removeComplexOperands(uncoverGet(uniquifyProgram(parsedProgram))))
   if (stage === "c") {
     if (verbose) console.log(c.emitProgram(p))
     return c.interpProgram(p)
@@ -50,7 +49,7 @@ function runAssignHomes(program: Program, stage: Stage, verbose = false) {
   if (verbose) console.log(x.emitProgram(xp))
   return x.interpProgram(xp)
 }
-function testLvar(name: string, sexp: string, stage: Stage = "c", verbose = false) {
+function testLvar(name: string, sexp: string, stage: Stage = "x", verbose = false) {
   const program = reparsePrimitives(parseProgram(sexp))
   const expected = runLvar(program)
   console.log("\t", l.emitProgram(program), "-->", expected)
