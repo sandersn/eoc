@@ -81,13 +81,13 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
       return [Instr("movq", e, to)]
     case "if":
     case "let":
-      throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
     case "set":
     case "get":
     case "begin":
     case "while":
+      throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
     case "void":
-      throw new Error("Don't know how to select instructions exp for set/begin/while/void")
+      return [Instr('movq', Imm(0), to)]
   }
 }
 function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
@@ -161,7 +161,7 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
     case "seq":
       return [...selectInstructionsStmt(s.head), ...selectInstructionsStmt(s.tail)]
     case "void":
-      throw new Error("Don't know how to select instructions for void")
+      throw new Error(`Unexpected ${s.kind} on rhs of assignment.`)
   }
 }
 function selectInstructionsAtom(e: Exp): Ref {
@@ -175,13 +175,13 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "prim":
     case "if":
     case "let":
-      throw new Error("Unexpected non-atomic expression in selectInstructionsAtom")
     case "set":
     case "get":
     case "begin":
     case "while":
+      throw new Error(`Unexpected non-atomic expression ${e.kind} in selectInstructionsAtom`)
     case "void":
-      throw new Error("Don't know how to select instructions atom for set/begin/while/void")
+      return Imm(0)
   }
 }
 export function interpProgram(p: CProgram): number {
