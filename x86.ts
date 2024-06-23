@@ -151,7 +151,6 @@ function analyseControlFlow(
   bottom: Set<string>,
   join: (s1: Set<string>, s2: Set<string>) => Set<string>
 ) {
-  // TODO: Old code special-cases 'conclusion' -- maybe this should too
   const mapping: Map<string, Set<string>> = new Map()
   for (const v of g.vertices()) {
     mapping.set(v, bottom)

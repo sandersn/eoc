@@ -96,6 +96,8 @@ function lex(s: string) {
 }
 export default function parse(sexp: string) {
   const lexer = lex(sexp)
+  return parseExp(lexer.next())
+
   function parseExp(t: Token): Exp {
     switch (t) {
       case Token.Number:
@@ -173,5 +175,4 @@ export default function parse(sexp: string) {
     assert(lexer.next() === Token.RParen)
     return Void()
   }
-  return parseExp(lexer.next())
 }
