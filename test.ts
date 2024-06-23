@@ -55,6 +55,23 @@ function testLvar(name: string, sexp: string, stage: Stage = "x", verbose = fals
   console.log("\t", l.emitProgram(program), "-->", expected)
   test(name, runAssignHomes(program, stage, verbose), expected)
 }
+testLvar(
+  "set-let",
+  `(let (x 5)
+     (let (i 0)
+       (begin
+         (set i (let (y 7) (+ x y)))
+         i)))`)
+testLvar(
+  "while-example",
+  `(let (sum 0) 
+    (let (i 5) 
+      (begin 
+        (while (> i 0) 
+          (begin 
+            (set sum (+ sum i)) 
+            (set i (- i 1))))
+        sum)))`)
 testLvar("single-begin", "(begin (+ 1 1))")
 testLvar("set-order-of-operations", "(let (x 2) (+ x (begin (set x 40) x)))")
 testLvar("set-order-of-operations-2", "(let (y 0) (let (x 2) (+ y (+ x (begin (set x 40) x)))))")
@@ -65,18 +82,6 @@ testLvar(
        (+ (+ (begin (set y3 42) x2)
              (begin (set x2 12) y3))
           x2)))`
-)
-// TODO: Asserts
-testLvar(
-  "while-example",
-  `(let (sum 0) 
-    (let (i 5) 
-      (begin 
-        (while (> i 0) 
-          (begin 
-            (set sum (+ sum i)) 
-            (set i (- i 1))))
-        sum)))`, 'c', true
 )
 test("test list basic", runLvar(parseProgram("(+ 1 2)")), 3)
 test("test lint basic", runLvar(parseProgram("(+ (+ 3 4) 12))")), 19)

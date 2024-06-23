@@ -28,12 +28,20 @@ export class DirectedGraph<T> {
   addEdge(v: T, w: T) {
     this.g.push([v, w])
   }
-  transpose() {
+  vertices() {
+    const vs: Set<T> = new Set()
+    for (const [v, w] of this.g) {
+      vs.add(v)
+      vs.add(w)
+    }
+    return vs
+  }
+  transpose(): [T, T][] {
     const g: [T, T][] = []
     for (const [v, w] of this.g) {
       g.push([w, v])
     }
-    this.g = g
+    return g
   }
   sort(): T[] {
     const sorted = []

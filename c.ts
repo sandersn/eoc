@@ -252,6 +252,7 @@ export function explicateControl(p: Program): CProgram {
         return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
       }
       case "set":
+        // TOD: Pretty sure e.exp needs to recur with an explicate* (same for other entries)
         return Seq(Assign(Var(x), Int(0)), Seq(Assign(Var(e.name), e.exp), k))
       case "get":
         throw new Error("removeComplexOperands should remove get")
@@ -381,7 +382,7 @@ export function explicateControl(p: Program): CProgram {
       case "let":
         return explicateAssign(e.exp, e.name, explicateEffect(e.body, k))
       case "set":
-        return Seq(Assign(Var(e.name), e.exp), k)
+        return explicateAssign(e.exp, e.name, k)
       case "begin": {
         let body = explicateEffect(e.body, k)
         for (let i = e.exps.length - 1; i >= 0; i--) {

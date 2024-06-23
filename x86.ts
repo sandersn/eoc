@@ -128,13 +128,58 @@ function interferenceBlock(block: Block, conflicts: Graph<string>): void {
 }
 export function uncoverLive(p: X86Program): void {
   const cfg = buildControlFlow(p.blocks)
-  cfg.transpose()
-  const flow = cfg.sort()
-  const labelToLive = new Map<string, Set<string>>([["conclusion", new Set(["rax", "rsp"])]])
-  for (const name of flow) {
-    if (name === "conclusion") continue
-    p.blocks.set(name, liveBlock(name, assertDefined(p.blocks.get(name)), labelToLive))
+  // not sure whether cfg.sort() is needed before, or after, cfg.transpose()
+  cfg.g = cfg.transpose()
+  // const labelToLive = new Map<string, Set<string>>([["conclusion", new Set(["rax", "rsp"])]])
+  const transfer = (name: string, block: Set<string>, mapping: Map<string, Set<string>>): Set<string> => {
+    // TODO: Can't tell when `block` is supposed to be used
+    // Problem: p.blocks only contains start, but every `return` jmps to conclusion. p.blocks needs to have a conclusion at an earlier date
+    // (orrr, have a special case in liveBlock to just return { rax, rsp } for conclusion
+    if (name === 'conclusion') {
+      return new Set(['rax', 'rsp'])
+    }
+    const b = assertDefined(p.blocks.get(name))
+    const { after, references } = liveBlock(name, b.instructions, mapping)
+    b.info.references = references
+    return after
   }
+  analyseControlFlow(cfg, transfer, new Set(), (s1, s2) => new Set([...s1, ...s2]))
+}
+function analyseControlFlow(
+  g: DirectedGraph<string>,
+  transfer: (name: string, block: Set<string>, mapping: Map<string, Set<string>>) => Set<string>,
+  bottom: Set<string>,
+  join: (s1: Set<string>, s2: Set<string>) => Set<string>
+) {
+  // TODO: Old code special-cases 'conclusion' -- maybe this should too
+  const mapping: Map<string, Set<string>> = new Map()
+  for (const v of g.vertices()) {
+    mapping.set(v, bottom)
+  }
+  const worklist = Array.from(g.vertices())
+  const transg: DirectedGraph<string> = new DirectedGraph()
+  transg.g = g.transpose()
+  while (worklist.length) {
+    const node = worklist.pop()!
+    let input: Set<string> = new Set()
+    for (const pred of transg.neighbours(node)) {
+      input = join(input, assertDefined(mapping.get(pred)))
+    }
+    const output = transfer(node, input, mapping)
+    if (!setEqual(output, assertDefined(mapping.get(node)))) {
+      mapping.set(node, output)
+      worklist.unshift(...g.neighbours(node))
+    }
+  }
+}
+function setEqual<T>(s1: Set<T>, s2: Set<T>) {
+  for (const x of s1) {
+    if (!s2.has(x)) return false
+  }
+  for (const x of s2) {
+    if (!s1.has(x)) return false
+  }
+  return true
 }
 function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
   const flow: DirectedGraph<string> = new DirectedGraph()
@@ -147,11 +192,11 @@ function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
   }
   return flow
 }
-function liveBlock(name: string, block: Block, labelToLive: Map<string, Set<string>>): Block {
+function liveBlock(name: string, instructions: Instr[], labelToLive: Map<string, Set<string>>): { after: Set<string>, references: Set<string>[] } {
   let after: Set<string> = new Set()
   let prev: { kind: "jmp"; label: string } | undefined = undefined
   const references = [after]
-  for (const i of block.instructions.toReversed()) {
+  for (const i of instructions.toReversed()) {
     let before: Set<string>
     if (i.kind === "jmp") {
       before = labelToLive.get(i.label)!
@@ -166,8 +211,7 @@ function liveBlock(name: string, block: Block, labelToLive: Map<string, Set<stri
     references.push(before)
     after = before
   }
-  labelToLive.set(name, after)
-  return Block({ ...block.info, references: references.toReversed() }, block.instructions)
+  return { after, references: references.toReversed() }
 }
 function liveReadInstr(i: Instr): string[] {
   switch (i.kind) {
