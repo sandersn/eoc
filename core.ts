@@ -38,3 +38,11 @@ export function setBox(box: Box, value: number): void {
 export function read() {
   return 0
 }
+let counter = 0
+export function gensym() {
+  return "g" + counter++
+}
+export type Type = symbol
+export const intType = Symbol("Integer")
+export const boolType = Symbol("Boolean")
+export const voidType = Symbol("Void")

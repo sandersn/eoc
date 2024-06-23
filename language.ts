@@ -2,11 +2,7 @@ import { assertDefined, zip, unzip, Box, box, setBox, unbox } from "./core.js"
 import { Exp, Atom, Prim, PrimAtom, Var, Program, Let, If, Bool, SetBang, Begin, While, GetBang } from "./factory.js"
 import parse from "./parser.js"
 import { AList, alist, assoc } from "./structures.js"
-import { read } from "./core.js"
-let counter = 0
-function gensym() {
-  return "g" + counter++
-}
+import { Type, intType, boolType, voidType, read, gensym } from "./core.js"
 /* ### Interpreter ### */
 export function interpExp(e: Exp, env: AList<string, Box> | undefined): number {
   switch (e.kind) {
@@ -64,14 +60,9 @@ export function interpProgram(p: Program): number {
 }
 
 export function parseProgram(sexp: string): Program {
-  return Program(undefined, parse(sexp))
+  return Program(parse(sexp))
 }
 /* ### Type checker ### */
-/** It's nominal babyyyyyyyyyyyyy */
-type Type = symbol
-const intType = Symbol("Integer")
-const boolType = Symbol("Boolean")
-const voidType = Symbol("Void")
 const operatorTypes = new Map<string, [[...Type[]], Type]>([
   ["+", [[intType, intType], intType]],
   ["-", [[intType, intType], intType]],
@@ -97,7 +88,7 @@ function assertTypeEqual(got: Type, expected: Type, e: Exp): void {
 export function typeCheckProgram(p: Program): Program {
   const [body, t] = typeCheckExp(p.body, undefined)
   assertTypeEqual(t, intType, p.body)
-  return Program(p.info, body)
+  return Program(body)
 }
 function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type] {
   switch (e.kind) {
@@ -224,7 +215,7 @@ export function emitType(t: Type): string {
  */
 /** Convert primitive nodes to ifs and calls as needed */
 export function reparsePrimitives(p: Program): Program {
-  return Program(p.info, reparsePrimitivesExp(p.body))
+  return Program(reparsePrimitivesExp(p.body))
 }
 function reparsePrimitivesExp(e: Exp): Exp {
   switch (e.kind) {
@@ -259,7 +250,7 @@ function reparsePrimitivesExp(e: Exp): Exp {
 }
 
 export function uniquifyProgram(p: Program): Program {
-  return Program(p.info, uniquifyExp(p.body, undefined))
+  return Program(uniquifyExp(p.body, undefined))
 }
 function uniquifyExp(e: Exp, env: AList<string, string> | undefined): Exp {
   switch (e.kind) {
@@ -295,7 +286,7 @@ function uniquifyExp(e: Exp, env: AList<string, string> | undefined): Exp {
 
 export function uncoverGet(p: Program): Program {
   const sets = collectSet(p.body)
-  return Program(p.info, uncoverGetExp(p.body))
+  return Program(uncoverGetExp(p.body))
 
   function uncoverGetExp(e: Exp): Exp {
     switch (e.kind) {
@@ -362,7 +353,7 @@ function collectSet(e: Exp): Set<string> {
 }
 
 export function removeComplexOperands(p: Program): Program {
-  return Program(p.info, removeComplexOperandsExp(p.body))
+  return Program(removeComplexOperandsExp(p.body))
 }
 function removeComplexOperandsExp(e: Exp): Exp {
   switch (e.kind) {

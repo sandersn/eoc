@@ -28,7 +28,7 @@ import {
   Cc,
 } from "./factory.js"
 import { interpExp, emitExp } from "./language.js"
-import { Graph, AList, alistFromMap } from "./structures.js"
+import { Graph, alistFromMap } from "./structures.js"
 /** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
 function bind(blocks: [string, Stmt][]): Map<string, number> {
   const env: Map<string, number> = new Map()

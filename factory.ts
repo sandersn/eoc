@@ -16,12 +16,11 @@ export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin
 export type Atom = Int | Bool | Var | Void
 export type Program = {
   kind: "program"
-  info?: AList<string, number>
   body: Exp
 }
 
-export function Program(info: AList<string, number> | undefined, body: Exp): Program {
-  return { kind: "program", info, body }
+export function Program(body: Exp): Program {
+  return { kind: "program", body }
 }
 export function Prim(op: "==" | ">" | "<" | ">=" | "<=", ...args: Exp[]): Cmp
 export function Prim(op: string, ...args: Exp[]): Prim
