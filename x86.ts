@@ -126,15 +126,17 @@ function interferenceBlock(block: Block, conflicts: Graph<string>): void {
     }
   }
 }
+// TODO: There can be completely unused blocks generated in the C program.
+// This seems like the right place to identify and delete them.
 export function uncoverLive(p: X86Program): void {
   const cfg = buildControlFlow(p.blocks)
+  for (const dead of cfg.findDead('start')) {
+    p.blocks.delete(dead)
+  }
   // not sure whether cfg.sort() is needed before, or after, cfg.transpose()
   cfg.g = cfg.transpose()
-  // const labelToLive = new Map<string, Set<string>>([["conclusion", new Set(["rax", "rsp"])]])
   const transfer = (name: string, block: Set<string>, mapping: Map<string, Set<string>>): Set<string> => {
-    // TODO: Can't tell when `block` is supposed to be used
-    // Problem: p.blocks only contains start, but every `return` jmps to conclusion. p.blocks needs to have a conclusion at an earlier date
-    // (orrr, have a special case in liveBlock to just return { rax, rsp } for conclusion
+    // TODO: Can't tell when `block` is supposed to be used (I ended up using p.blocks.get(name) instead)
     if (name === 'conclusion') {
       return new Set(['rax', 'rsp'])
     }
@@ -160,6 +162,7 @@ function analyseControlFlow(
   transg.g = g.transpose()
   while (worklist.length) {
     const node = worklist.pop()!
+    // TODO: This isn't actually used, which seems really wrong
     let input: Set<string> = new Set()
     for (const pred of transg.neighbours(node)) {
       input = join(input, assertDefined(mapping.get(pred)))

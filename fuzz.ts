@@ -1,50 +1,86 @@
 import assert from "node:assert"
-import { Program, Exp, Prim, Int, Bool, If, Let, Var, Void } from "./factory.js"
+import { Program, Exp, Prim, Int, Bool, If, Let, Var, Void, Begin, SetBang } from "./factory.js"
 import { Type, intType, boolType, gensym } from "./core.js"
-import { alist, AList } from "./structures.js"
+import { alist, alength, AList } from "./structures.js"
 // TODO: (almost) everything in here should use delayed evaluation
 // analyseControlFlow is slow for large inputs. Probably quadratic, cubic or even worse.
 //    to get around this for now, keep a blockcount, and reduce the probability of block-producing expressions when it is exceeded
 type Env = AList<string, Type> | undefined
+type Target = (env: Env) => Exp
 let blockCount = 0
+let depth = 0
+const maxDepth = 10
 export function createProgram(): Program {
   blockCount = 0
   return Program(randomIntegerExp(undefined))
 }
+function deeper(f: () => Exp, stop: Exp) {
+  if (depth < maxDepth) {
+    depth++
+    const exp = f()
+    depth--
+    return exp
+  }
+  return stop
+}
 const cmps = [() => "==" as const, () => ">" as const, () => "<" as const, () => ">=" as const, () => "<=" as const]
 function randomIntegerExp(env: Env): Exp {
   const ints = findValues(env, intType).map(v => () => Var(v))
-  return choose(
-    [
-      ...(ints.length ? [() => choose(ints)] : []),
-      () => Int(range(100000)),
-      () => randomArithmetic(env),
-      () => randomIf(env, randomIntegerExp),
-      () => randomLet(env, randomIntegerExp),
-    ],
-    [...(ints.length ? [2] : []), 2, blockCount > 8 ? 0.001 : 2.5, 1, 0.5]
+  return deeper(
+    () =>
+      choose(
+        [
+          ...ints,
+          () => Int(range(1000)),
+          () => randomArithmetic(env),
+          () => randomIf(env, randomIntegerExp),
+          () => randomLet(env, randomIntegerExp),
+          () => randomBegin(env, randomIntegerExp),
+        ],
+        [...ints.map(_ => 1), 2, blockCount > 8 ? 0.001 : 2.5, 1, 0.5, 0.5]
+      ),
+    Int(range(1000))
   )
 }
 function randomBooleanExp(env: Env): Exp {
   const bools = findValues(env, boolType).map(v => () => Var(v))
-  return choose(
-    [
-      ...(bools.length ? [() => choose(bools)] : []),
-      () => randomLogicalop(env),
-      () => Bool(true),
-      () => Bool(false),
-      () => randomComparison(env),
-      () => randomIf(env, randomBooleanExp),
-      () => randomLet(env, randomBooleanExp),
-    ],
-    [...(bools.length ? [2] : []), 6 * 2, 2, 2, 5 * 2, blockCount > 8 ? 0.001 : 2.5, 0.5]
+  return deeper(
+    () =>
+      choose(
+        [
+          ...bools,
+          () => randomLogicalop(env),
+          () => Bool(true),
+          () => Bool(false),
+          () => randomComparison(env),
+          () => randomIf(env, randomBooleanExp),
+          () => randomLet(env, randomBooleanExp),
+          () => randomBegin(env, randomBooleanExp),
+        ],
+        [...bools.map(_ => 1), 6 * 2, 2, 2, 5 * 2, blockCount > 8 ? 0.001 : 2.5, 0.5, 0.5]
+      ),
+    choose([() => Bool(true), () => Bool(false)])
   )
 }
-function randomIf(env: Env, target: (env: Env) => Exp): Exp {
+function randomVoidExp(env: Env): Exp {
+  const voids: (() => Exp)[] = []
+  while (env) {
+    voids.push(() => SetBang(env.key, env.value === intType ? randomIntegerExp(env) : randomBooleanExp(env)))
+  }
+  return deeper(() => choose([() => Void(), ...voids]), Void())
+}
+function randomBegin(env: Env, target: Target): Exp {
+  const exps = []
+  for (let i = 0; i < range(Math.ceil(alength(env) / 3)); i++) {
+    exps.push(randomVoidExp(env))
+  }
+  return Begin(exps, target(env))
+}
+function randomIf(env: Env, target: Target): Exp {
   blockCount += 2
   return If(randomBooleanExp(env), target(env), target(env))
 }
-function randomLet(env: Env, target: (env: Env) => Exp): Exp {
+function randomLet(env: Env, target: Target): Exp {
   const name = gensym()
   const [exp, i] = chooseAndTell([() => randomIntegerExp(env), () => randomBooleanExp(env)])
   const envp = alist(name, i === 0 ? intType : boolType, env)

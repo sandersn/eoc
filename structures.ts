@@ -24,6 +24,27 @@ export class Graph<T> {
   }
 }
 export class DirectedGraph<T> {
+  /**
+   * Find vertices that have no incoming edges, recursively, and remove them.
+   * @returns vertices that have no incoming edges, recursively
+   */
+  findDead(start: T): T[] {
+    const dead = []
+    let deadlen = -1
+    while (deadlen < dead.length) {
+      deadlen = dead.length
+      const vs = this.vertices()
+      vs.delete(start)
+      for (const live of new Set(this.g.map(([_, w]) => w))) {
+        vs.delete(live)
+      }
+      for (const v of vs) {
+        dead.push(v)
+        this.g = this.g.filter(([v2, _]) => v2 !== v)
+      }
+    }
+    return dead
+  }
   g: [T, T][] = []
   addEdge(v: T, w: T) {
     this.g.push([v, w])
@@ -97,4 +118,12 @@ export function alistFromMap<K, V, V2>(m: Map<K, V>, f: (v: V) => V2): AList<K, 
     head = alist(k, f(v), head)
   }
   return head
+}
+export function alength(env: AList<any, any> | undefined): number {
+  let n = 0
+  while (env) {
+    n++
+    env = env.next!
+  }
+  return n
 }
