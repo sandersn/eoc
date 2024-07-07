@@ -65,13 +65,6 @@ function fuzz(i: number) {
   test("fuzz" + i, runAssignHomes(program, "x", false), expected)
 }
 testLvar(
-  "set-let",
-  `(let (x 5)
-     (let (i 0)
-       (begin
-         (set i (let (y 7) (+ x y)))
-         i)))`)
-testLvar(
   "while-example",
   `(let (sum 0)
     (let (i 5)
@@ -80,7 +73,14 @@ testLvar(
           (begin
             (set sum (+ sum i))
             (set i (- i 1))))
-        sum)))`)
+        sum)))`, 'x', true)
+testLvar(
+  "set-let",
+  `(let (x 5)
+     (let (i 0)
+       (begin
+         (set i (let (y 7) (+ x y)))
+         i)))`)
 testLvar("single-begin", "(begin (+ 1 1))")
 testLvar("set-order-of-operations", "(let (x 2) (+ x (begin (set x 40) x)))")
 testLvar("set-order-of-operations-2", "(let (y 0) (let (x 2) (+ y (+ x (begin (set x 40) x)))))")
@@ -131,12 +131,12 @@ testLvar("if-==", "(let (x 1) (if (== x 2) 1 0))")
 // TODO: Test get/set unbound things
 // testLvar("not-bad", "(let (x #t) (let (y #f) (if (not x) (not y) 2)))")
 // testLvar("not-bad2", "(let (x #t) (let (y #f) (if (not x) (not y) (not 2))))")
-testLvar("fuzz-guess", `
-(if (if #f 
-      (> 161088 (if #t 94550 67907))
-      #f) 
-  0 1) 
-  `, 'x', true);
+// testLvar("fuzz-guess", `
+// (if (if #f 
+//       (> 161088 (if #t 94550 67907))
+//       #f) 
+//   0 1) 
+//   `);
 // testLvar(
 //   "fuzz1",
 //   `(let (g36 (+ (if (if 

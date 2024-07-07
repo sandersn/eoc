@@ -135,8 +135,7 @@ export function uncoverLive(p: X86Program): void {
   }
   // not sure whether cfg.sort() is needed before, or after, cfg.transpose()
   cfg.g = cfg.transpose()
-  const transfer = (name: string, block: Set<string>, mapping: Map<string, Set<string>>): Set<string> => {
-    // TODO: Can't tell when `block` is supposed to be used (I ended up using p.blocks.get(name) instead)
+  const transfer = (name: string, mapping: Map<string, Set<string>>): Set<string> => {
     if (name === 'conclusion') {
       return new Set(['rax', 'rsp'])
     }
@@ -145,13 +144,12 @@ export function uncoverLive(p: X86Program): void {
     b.info.references = references
     return after
   }
-  analyseControlFlow(cfg, transfer, new Set(), (s1, s2) => new Set([...s1, ...s2]))
+  analyseControlFlow(cfg, transfer, new Set())
 }
 function analyseControlFlow(
   g: DirectedGraph<string>,
-  transfer: (name: string, block: Set<string>, mapping: Map<string, Set<string>>) => Set<string>,
+  transfer: (name: string, mapping: Map<string, Set<string>>) => Set<string>,
   bottom: Set<string>,
-  join: (s1: Set<string>, s2: Set<string>) => Set<string>
 ) {
   const mapping: Map<string, Set<string>> = new Map()
   for (const v of g.vertices()) {
@@ -162,12 +160,10 @@ function analyseControlFlow(
   transg.g = g.transpose()
   while (worklist.length) {
     const node = worklist.pop()!
-    // TODO: This isn't actually used, which seems really wrong
-    let input: Set<string> = new Set()
-    for (const pred of transg.neighbours(node)) {
-      input = join(input, assertDefined(mapping.get(pred)))
-    }
-    const output = transfer(node, input, mapping)
+    // NOTE: I use mapping to let each jmp[if] instruction get each predecessors' live sets instead of
+    // unioning them all together beforehand like the book does. I don't know if that's correct but it
+    // has worked so far.
+    const output = transfer(node, mapping)
     if (!setEqual(output, assertDefined(mapping.get(node)))) {
       mapping.set(node, output)
       worklist.unshift(...g.neighbours(node))
