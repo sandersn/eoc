@@ -21,14 +21,14 @@ export function zip<T, U>(ts: T[], us: U[]): Array<[T, U]> {
   }
   return tus
 }
-export type Box = { ref: number }
-export function box(value: number): Box {
+export type Box = { ref: Value }
+export function box(value: Value): Box {
   return { ref: value }
 }
-export function unbox(box: Box): number {
+export function unbox(box: Box): Value {
   return box.ref
 }
-export function setBox(box: Box, value: number): void {
+export function setBox(box: Box, value: Value): void {
   box.ref = value
 }
 /** Read a number from stdin
@@ -42,7 +42,8 @@ let counter = 0
 export function gensym() {
   return "g" + counter++
 }
-export type Type = symbol
+export type Value = { kind: 'int', value: number } | { kind: 'vector', values: Value[] } | { kind: 'void' }
+export type Type = symbol | { kind: "Vector"; types: Type[] }
 export const intType = Symbol("Integer")
 export const boolType = Symbol("Boolean")
 export const voidType = Symbol("Void")

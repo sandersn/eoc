@@ -84,7 +84,14 @@ function lex(s: string) {
           }
           if (("a" <= s[i] && s[i] <= "z") || ("A" <= s[i] && "Z" <= s[i])) {
             let j = i
-            while (("a" <= s[i] && s[i] <= "z") || ("A" <= s[i] && "Z" <= s[i]) || ("0" <= s[i] && s[i] <= "9")) i++
+            while (
+              ("a" <= s[i] && s[i] <= "z") ||
+              ("A" <= s[i] && "Z" <= s[i]) ||
+              ("0" <= s[i] && s[i] <= "9") ||
+              s[i] === "-" ||
+              s[i] === "_"
+            )
+              i++
             value = s.slice(j, i)
             return keywords[value as keyof typeof keywords] ?? Token.Identifier
           }

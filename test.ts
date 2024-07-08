@@ -73,7 +73,7 @@ testLvar(
           (begin
             (set sum (+ sum i))
             (set i (- i 1))))
-        sum)))`, 'x', true)
+        sum)))`)
 testLvar(
   "set-let",
   `(let (x 5)
@@ -127,6 +127,13 @@ testLvar("if-<=", "(let (x 1) (let (y 2) (if (<= x y) 1 0)))")
 testLvar("if-<", "(let (x 1) (let (y 2) (if (< x y) 1 0)))")
 testLvar("if->", "(let (x 1) (let (y 2) (if (> x y) 1 0)))")
 testLvar("if-==", "(let (x 1) (if (== x 2) 1 0))")
+testLvar("vector-from-book", 
+  `(let (t (vector 40 #t (vector 2)))
+    (if (vector-ref t 1)
+      (+ (vector-ref t 0)
+         (vector-ref (vector-ref t 2) 0))
+      44))`, 'l', true)
+// TODO: Still need to test vector-set and vector-length
 // TODO: Function to test type checking failure
 // TODO: Test get/set unbound things
 // testLvar("not-bad", "(let (x #t) (let (y #f) (if (not x) (not y) 2)))")

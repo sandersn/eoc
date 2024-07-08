@@ -1,3 +1,4 @@
+import { Value } from "./core.js";
 import { AList, Graph } from "./structures.js"
 /** for Language */
 export type Var = { kind: "var"; name: string }
@@ -72,7 +73,7 @@ export type Stmt =
   | { kind: "if"; cond: Cmp; then: Goto; else: Goto }
 export type CProgram = {
   kind: "cprogram"
-  locals: Map<string, number>
+  locals: Map<string, Value>
   body: Map<string, Stmt>
 }
 export function Assign(v: Var, exp: Exp): Stmt {
@@ -90,7 +91,7 @@ export function Goto(label: string): Goto {
 export function IfStmt(cond: Cmp, then: Goto, else_: Goto): Stmt {
   return { kind: "if", cond, then, else: else_ }
 }
-export function CProgram(locals: Map<string, number>, body: Map<string, Stmt>): CProgram {
+export function CProgram(locals: Map<string, Value>, body: Map<string, Stmt>): CProgram {
   return { kind: "cprogram", locals, body }
 }
 

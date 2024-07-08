@@ -1,15 +1,31 @@
-import { assertDefined, zip, unzip, Box, box, setBox, unbox } from "./core.js"
-import { Exp, Atom, Prim, PrimAtom, Var, Program, Let, If, Bool, SetBang, Begin, While, GetBang } from "./factory.js"
+import { assertDefined, zip, unzip, Box, box, setBox, unbox, Value } from "./core.js"
+import {
+  Exp,
+  Atom,
+  Prim,
+  PrimAtom,
+  Var,
+  Program,
+  Let,
+  If,
+  Bool,
+  SetBang,
+  Begin,
+  While,
+  GetBang,
+  Int,
+} from "./factory.js"
 import parse from "./parser.js"
 import { AList, alist, assoc } from "./structures.js"
 import { Type, intType, boolType, voidType, read, gensym } from "./core.js"
+import assert from "node:assert"
 /* ### Interpreter ### */
-export function interpExp(e: Exp, env: AList<string, Box> | undefined): number {
+export function interpExp(e: Exp, env: AList<string, Box> | undefined): Value {
   switch (e.kind) {
     case "int":
-      return e.val
+      return { kind: "int", value: e.val }
     case "bool":
-      return e.val ? 1 : 0
+      return { kind: "int", value: e.val ? 1 : 0 }
     case "get":
       throw new Error("Do not interpret post uncoverGet ASTs.")
     case "var": {
@@ -19,44 +35,81 @@ export function interpExp(e: Exp, env: AList<string, Box> | undefined): number {
       return interpExp(e.body, alist(e.name, box(interpExp(e.exp, env)), env))
     case "set":
       setBox(assertDefined(assoc(env, e.name)), interpExp(e.exp, env))
-      return NaN
+      return { kind: "void" }
     case "begin":
       for (const exp of e.exps) {
-        if (!isNaN(interpExp(exp, env))) {
+        const exp2 = interpExp(exp, env)
+        if (typeof exp2 === "number" || exp2.kind !== "void") {
           throw new Error("Expected expression to have type void, but it returned a value.")
         }
       }
       return interpExp(e.body, env)
-    case "while":
-      while (interpExp(e.cond, env)) {
+    case "while": {
+      let cond
+      while ((cond = interpExp(e.cond, env)).kind === "int" && cond.value === 1) {
         interpExp(e.body, env)
       }
-      return NaN
+      return { kind: "void" }
+    }
     case "void":
-      return NaN
+      return { kind: "void" }
     case "prim":
       return interpPrim(e, env)
     case "if":
-      return interpExp(e.cond, env) === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
+      const cond = interpExp(e.cond, env)
+      return cond.kind === "int" && cond.value === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
   }
 }
-function interpPrim(e: Prim, env: AList<string, Box> | undefined): number {
-  if (e.op === "read") return +read()
-  if (e.op === "+") return interpExp(e.args[0], env) + interpExp(e.args[1], env)
-  if (e.op === "-" && e.args.length === 1) return -interpExp(e.args[0], env)
-  if (e.op === "-" && e.args.length === 2) return interpExp(e.args[0], env) - interpExp(e.args[1], env)
-  if (e.op === "and" && e.args.length === 2) return interpExp(e.args[0], env) && interpExp(e.args[1], env)
-  if (e.op === "or" && e.args.length === 2) return interpExp(e.args[0], env) || interpExp(e.args[1], env)
-  if (e.op === "not" && e.args.length === 1) return interpExp(e.args[0], env) ? 0 : 1
-  if (e.op === "<=" && e.args.length === 2) return interpExp(e.args[0], env) <= interpExp(e.args[1], env) ? 1 : 0
-  if (e.op === "<" && e.args.length === 2) return interpExp(e.args[0], env) < interpExp(e.args[1], env) ? 1 : 0
-  if (e.op === ">=" && e.args.length === 2) return interpExp(e.args[0], env) >= interpExp(e.args[1], env) ? 1 : 0
-  if (e.op === ">" && e.args.length === 2) return interpExp(e.args[0], env) > interpExp(e.args[1], env) ? 1 : 0
-  if (e.op === "==" && e.args.length === 2) return interpExp(e.args[0], env) === interpExp(e.args[1], env) ? 1 : 0
-  return NaN
+function interpPrim(e: Prim, env: AList<string, Box> | undefined): Value {
+  const values = e.args.map(arg => interpExp(arg, env))
+  if (e.op === "read") return { kind: "int", value: +read() }
+  if (e.op === "vector") return { kind: "vector", values }
+  if (values.length === 1) {
+    if (e.op === "-") {
+      assert(values[0].kind === "int")
+      return { kind: "int", value: -values[0].value }
+    }
+    if (e.op === "vector-length") {
+      assert(values[0].kind === "vector")
+      return { kind: 'int', value: values[0].values.length }
+    }
+  }
+  if (values.length === 2) {
+    if (e.op === "vector-ref") {
+      assert(values[0].kind === "vector")
+      assert(values[1].kind === "int")
+      return values[0].values[values[1].value]
+    }
+    assert(values[0].kind === "int")
+    assert(values[1].kind === "int")
+    let value: number
+    if (e.op === "+") value = values[0].value + values[1].value
+    else if (e.op === "-") value = values[0].value - values[1].value
+    else if (e.op === "and") value = values[0].value && values[1].value
+    else if (e.op === "or") value = values[0].value || values[1].value
+    else if (e.op === "not") value = values[0].value ? 0 : 1
+    else if (e.op === "<=") value = values[0].value <= values[1].value ? 1 : 0
+    else if (e.op === "<") value = values[0].value < values[1].value ? 1 : 0
+    else if (e.op === ">=") value = values[0].value >= values[1].value ? 1 : 0
+    else if (e.op === ">") value = values[0].value > values[1].value ? 1 : 0
+    else if (e.op === "==") value = values[0].value === values[1].value ? 1 : 0
+    else value = NaN
+    return { kind: "int", value }
+  }
+  if (values.length === 3) {
+    if (e.op === "vector-set") {
+      assert(values[0].kind === "vector")
+      assert(values[1].kind === "int")
+      values[0].values[values[1].value] = values[2]
+      return { kind: 'void' }
+    }
+  }
+  return { kind: "void" }
 }
 export function interpProgram(p: Program): number {
-  return interpExp(p.body, undefined)
+  const value = interpExp(p.body, undefined)
+  assert(value.kind === "int")
+  return value.value
 }
 
 export function parseProgram(sexp: string): Program {
@@ -76,7 +129,11 @@ const operatorTypes = new Map<string, [[...Type[]], Type]>([
   [">", [[intType, intType], boolType]],
 ])
 function isTypeEqual(t1: Type, t2: Type): boolean {
-  return t1 === t2
+  if (typeof t1 === "symbol" && typeof t2 === "symbol") return t1 === t2
+  else if (typeof t1 !== "symbol" && typeof t2 !== "symbol" && t1.kind === "Vector" && t2.kind === "Vector") {
+    return zip(t1.types, t2.types).every(([t1, t2]) => isTypeEqual(t1, t2))
+  }
+  return false
 }
 function assertTypeEqual(got: Type, expected: Type, e: Exp): void {
   if (!isTypeEqual(got, expected)) {
@@ -108,6 +165,29 @@ function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type]
         const [e1, t1] = typeCheckExp(e.args[0], env)
         assertTypeEqual(t1, intType, e)
         return [Prim(e.op, e1), intType]
+      } else if (e.op === "vector") {
+        const [args, types] = unzip(e.args.map(arg => typeCheckExp(arg, env)))
+        return [Prim(e.op, ...args), { kind: "Vector", types }]
+      } else if (e.op === "vector-ref" && e.args.length === 2) {
+        const [vec, tvec] = typeCheckExp(e.args[0], env)
+        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        const [index, tindex] = typeCheckExp(e.args[1], env)
+        assertTypeEqual(tindex, intType, e)
+        assert(index.kind === "int", "Expected literal integer for vector index")
+        return [Prim(e.op, vec, index), tvec.types[(index as Int).val]]
+      } else if (e.op === "vector-set" && e.args.length === 3) {
+        const [vec, tvec] = typeCheckExp(e.args[0], env)
+        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        const [index, tindex] = typeCheckExp(e.args[1], env)
+        assertTypeEqual(tindex, intType, e)
+        assert(index.kind === "int", "Expected literal integer for vector index")
+        const [val, tval] = typeCheckExp(e.args[2], env)
+        assertTypeEqual(tval, tvec.types[(index as Int).val], e.args[2])
+        return [Prim(e.op, vec, index, e), voidType]
+      } else if (e.op === "vector-length" && e.args.length === 1) {
+        const [vec, tvec] = typeCheckExp(e.args[0], env)
+        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        return [Prim(e.op, vec), intType]
       }
       const [args, ts] = unzip(e.args.map(arg => typeCheckExp(arg, env)))
       return [Prim(e.op, ...args), typeCheckOp(e.op, ts, e)]

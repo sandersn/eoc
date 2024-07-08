@@ -1,4 +1,5 @@
-import { assertDefined, box } from "./core.js"
+import { assertDefined, box, Value } from "./core.js"
+import assert from "node:assert"
 import {
   Assign,
   Var,
@@ -30,13 +31,13 @@ import {
 import { interpExp, emitExp } from "./language.js"
 import { Graph, alistFromMap } from "./structures.js"
 /** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
-function bind(blocks: [string, Stmt][]): Map<string, number> {
-  const env: Map<string, number> = new Map()
+function bind(blocks: [string, Stmt][]): Map<string, Value> {
+  const env: Map<string, Value> = new Map()
   let i = 1
   function worker(s: Stmt): void {
     switch (s.kind) {
       case "assign":
-        env.set(s.var.name, i)
+        env.set(s.var.name, { kind: "int", value: i })
         i++
         break
       case "return":
@@ -87,7 +88,7 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
     case "while":
       throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
     case "void":
-      return [Instr('movq', Imm(0), to)]
+      return [Instr("movq", Imm(0), to)]
   }
 }
 function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
@@ -185,8 +186,10 @@ function selectInstructionsAtom(e: Exp): Ref {
   }
 }
 export function interpProgram(p: CProgram): number {
-  return interpStatement(assertDefined(p.body.get("start")))
-  function interpStatement(e: Stmt): number {
+  const value = interpStatement(assertDefined(p.body.get("start")))
+  assert(value.kind === "int")
+  return value.value
+  function interpStatement(e: Stmt): Value {
     const env2 = alistFromMap(p.locals, box)
     switch (e.kind) {
       case "assign": {
@@ -198,13 +201,14 @@ export function interpProgram(p: CProgram): number {
         interpStatement(e.head)
         return interpStatement(e.tail)
       case "if":
-        return interpStatement(interpExp(e.cond, env2) ? e.then : e.else)
+        const cond = interpExp(e.cond, env2)
+        return interpStatement(cond.kind === "int" && cond.value === 1 ? e.then : e.else)
       case "goto":
         return interpStatement(assertDefined(p.body.get(e.label)))
       case "return":
         return interpExp(e.exp, env2)
       case "void":
-        return 0
+        return { kind: "void" }
     }
   }
 }
