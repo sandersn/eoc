@@ -86,7 +86,12 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
     case "get":
     case "begin":
     case "while":
+    case "as":
       throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
+    case "allocate":
+    case "collect":
+    case "global-value":
+      throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
     case "void":
       return [Instr("movq", Imm(0), to)]
   }
@@ -180,7 +185,12 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "get":
     case "begin":
     case "while":
+    case "as":
       throw new Error(`Unexpected non-atomic expression ${e.kind} in selectInstructionsAtom`)
+    case "allocate":
+    case "collect":
+    case "global-value":
+      throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
     case "void":
       return Imm(0)
   }
@@ -249,7 +259,6 @@ export function explicateControl(p: Program): CProgram {
       case "prim":
         return Seq(Assign(Var(x), e), k)
       case "if":
-        // TODO: I just wrote this mechanically (or copilot did) but it works. Come up with more test cases to break it!
         k = createBlock(k)
         return explicatePred(e.cond, explicateAssign(e.then, x, k), explicateAssign(e.else, x, k))
       case "let": {
@@ -275,6 +284,12 @@ export function explicateControl(p: Program): CProgram {
         return Seq(Assign(Var(x), Int(0)), loop)
       case "void":
         return k
+      case "as":
+        throw new Error("as should have been removed by exposeAllocation")
+      case "allocate":
+      case "collect":
+      case "global-value":
+        throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
     }
   }
   function explicateTail(e: Exp): Stmt {
@@ -320,6 +335,12 @@ export function explicateControl(p: Program): CProgram {
       }
       case "void":
         return Return(Int(0))
+      case "as":
+        throw new Error("as should have been removed by exposeAllocation")
+      case "allocate":
+      case "collect":
+      case "global-value":
+        throw new Error("Don't know how to handle allocate/collect/global-value in explicateTail.")
     }
   }
   function createBlock(k: Stmt): Goto {
@@ -369,7 +390,12 @@ export function explicateControl(p: Program): CProgram {
       case "get":
       case "while":
       case "void":
-        throw new Error("Type checker should prevent set/get/while/void from appearing here")
+      case "as":
+        throw new Error("Type checker should prevent set/get/while/void/as from appearing here")
+      case "allocate":
+      case "collect":
+      case "global-value":
+        throw new Error("Don't know how to handle allocate/collect/global-value in explicatePred.")
     }
   }
   function explicateEffect(e: Exp, k: Stmt): Stmt {
@@ -402,6 +428,12 @@ export function explicateControl(p: Program): CProgram {
         return loop
       case "void":
         return k
+      case "as":
+        throw new Error("as should have been removed by exposeAllocation")
+      case "allocate":
+      case "collect":
+      case "global-value":
+        throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
     }
   }
 }

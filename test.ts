@@ -1,6 +1,6 @@
 import * as l from "./language.js"
 import { createProgram } from "./fuzz.js"
-import { uncoverGet, uniquifyProgram, parseProgram, removeComplexOperands, reparsePrimitives } from "./language.js"
+import { uncoverGet, uniquifyProgram, parseProgram, removeComplexOperands, reparsePrimitives, typeCheckProgram, exposeAllocation } from "./language.js"
 import * as c from "./c.js"
 import { explicateControl, selectInstructions } from "./c.js"
 import * as x from "./x86.js"
@@ -14,29 +14,17 @@ function test(name: string, actual: number, expected: number) {
 function runLvar(p: Program) {
   return l.interpProgram(p)
 }
-function runUniquifyLvar(sexp: string) {
-  const p = uniquifyProgram(parseProgram(sexp))
-  console.log(l.emitProgram(p))
-  return l.interpProgram(p)
-}
-function runRemoveComplexLvar(sexp: string) {
-  const p = removeComplexOperands(uniquifyProgram(parseProgram(sexp)))
-  console.log(l.emitProgram(p))
-  return l.interpProgram(p)
-}
-function runExplicateControl(sexp: string) {
-  const p = explicateControl(removeComplexOperands(uniquifyProgram(parseProgram(sexp))))
-  console.log(c.emitProgram(p))
-  return c.interpProgram(p)
-}
 type Stage = "l" | "c" | "x"
 function runAssignHomes(program: Program, stage: Stage, verbose = false) {
-  const parsedProgram = l.typeCheckProgram(program)
+  const parsedProgram = typeCheckProgram(program)
   if (stage === "l") {
     if (verbose) console.log(l.emitProgram(parsedProgram))
     return l.interpProgram(parsedProgram)
   }
-  const p = explicateControl(removeComplexOperands(uncoverGet(uniquifyProgram(parsedProgram))))
+  if (verbose) {
+    console.log(l.emitProgram(exposeAllocation(uniquifyProgram(parsedProgram))))
+  }
+  const p = explicateControl(removeComplexOperands(uncoverGet(exposeAllocation(uniquifyProgram(parsedProgram)))))
   if (stage === "c") {
     if (verbose) console.log(c.emitProgram(p))
     return c.interpProgram(p)
@@ -132,7 +120,7 @@ testLvar("vector-from-book",
     (if (vector-ref t 1)
       (+ (vector-ref t 0)
          (vector-ref (vector-ref t 2) 0))
-      44))`, 'l', true)
+      44))`, 'c', true)
 // TODO: Still need to test vector-set and vector-length
 // TODO: Function to test type checking failure
 // TODO: Test get/set unbound things

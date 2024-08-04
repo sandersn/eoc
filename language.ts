@@ -14,11 +14,17 @@ import {
   While,
   GetBang,
   Int,
+  As,
+  Void,
+  Collect,
+  GlobalValue,
+  Allocate,
 } from "./factory.js"
 import parse from "./parser.js"
 import { AList, alist, assoc } from "./structures.js"
 import { Type, intType, boolType, voidType, read, gensym } from "./core.js"
 import assert from "node:assert"
+import { X509Certificate } from "node:crypto"
 /* ### Interpreter ### */
 export function interpExp(e: Exp, env: AList<string, Box> | undefined): Value {
   switch (e.kind) {
@@ -51,6 +57,7 @@ export function interpExp(e: Exp, env: AList<string, Box> | undefined): Value {
       }
       return { kind: "void" }
     }
+    case "collect":
     case "void":
       return { kind: "void" }
     case "prim":
@@ -58,6 +65,12 @@ export function interpExp(e: Exp, env: AList<string, Box> | undefined): Value {
     case "if":
       const cond = interpExp(e.cond, env)
       return cond.kind === "int" && cond.value === 1 ? interpExp(e.then, env) : interpExp(e.else, env)
+    case "as":
+      return interpExp(e.exp, env)
+    case "global-value":
+      return { kind: "int", value: 0 }
+    case "allocate":
+      return { kind: "vector", values: Array(e.len) }
   }
 }
 function interpPrim(e: Prim, env: AList<string, Box> | undefined): Value {
@@ -71,7 +84,7 @@ function interpPrim(e: Prim, env: AList<string, Box> | undefined): Value {
     }
     if (e.op === "vector-length") {
       assert(values[0].kind === "vector")
-      return { kind: 'int', value: values[0].values.length }
+      return { kind: "int", value: values[0].values.length }
     }
   }
   if (values.length === 2) {
@@ -101,7 +114,7 @@ function interpPrim(e: Prim, env: AList<string, Box> | undefined): Value {
       assert(values[0].kind === "vector")
       assert(values[1].kind === "int")
       values[0].values[values[1].value] = values[2]
-      return { kind: 'void' }
+      return { kind: "void" }
     }
   }
   return { kind: "void" }
@@ -130,7 +143,7 @@ const operatorTypes = new Map<string, [[...Type[]], Type]>([
 ])
 function isTypeEqual(t1: Type, t2: Type): boolean {
   if (typeof t1 === "symbol" && typeof t2 === "symbol") return t1 === t2
-  else if (typeof t1 !== "symbol" && typeof t2 !== "symbol" && t1.kind === "Vector" && t2.kind === "Vector") {
+  else if (typeof t1 !== "symbol" && typeof t2 !== "symbol" && t1.kind === "vector" && t2.kind === "vector") {
     return zip(t1.types, t2.types).every(([t1, t2]) => isTypeEqual(t1, t2))
   }
   return false
@@ -167,17 +180,18 @@ function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type]
         return [Prim(e.op, e1), intType]
       } else if (e.op === "vector") {
         const [args, types] = unzip(e.args.map(arg => typeCheckExp(arg, env)))
-        return [Prim(e.op, ...args), { kind: "Vector", types }]
+        const t = { kind: "vector", types } as const
+        return [As(Prim(e.op, ...args), t), t]
       } else if (e.op === "vector-ref" && e.args.length === 2) {
         const [vec, tvec] = typeCheckExp(e.args[0], env)
-        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        assert(typeof tvec !== "symbol" && tvec.kind === "vector", "Expected vector type")
         const [index, tindex] = typeCheckExp(e.args[1], env)
         assertTypeEqual(tindex, intType, e)
         assert(index.kind === "int", "Expected literal integer for vector index")
         return [Prim(e.op, vec, index), tvec.types[(index as Int).val]]
       } else if (e.op === "vector-set" && e.args.length === 3) {
         const [vec, tvec] = typeCheckExp(e.args[0], env)
-        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        assert(typeof tvec !== "symbol" && tvec.kind === "vector", "Expected vector type")
         const [index, tindex] = typeCheckExp(e.args[1], env)
         assertTypeEqual(tindex, intType, e)
         assert(index.kind === "int", "Expected literal integer for vector index")
@@ -186,7 +200,7 @@ function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type]
         return [Prim(e.op, vec, index, e), voidType]
       } else if (e.op === "vector-length" && e.args.length === 1) {
         const [vec, tvec] = typeCheckExp(e.args[0], env)
-        assert(typeof tvec !== "symbol" && tvec.kind === "Vector", "Expected vector type")
+        assert(typeof tvec !== "symbol" && tvec.kind === "vector", "Expected vector type")
         return [Prim(e.op, vec), intType]
       }
       const [args, ts] = unzip(e.args.map(arg => typeCheckExp(arg, env)))
@@ -232,6 +246,11 @@ function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type]
       assertTypeEqual(t3, t2, e)
       return [If(cond, then, else_), t2]
     }
+    case "as":
+    case "collect":
+    case "allocate":
+    case "global-value":
+      throw new Error("Unexpected as/collect/allocate/global-value in type checking.")
   }
 }
 function typeCheckOp(op: string, args: Type[], e: Prim): Type {
@@ -244,6 +263,65 @@ function typeCheckOp(op: string, args: Type[], e: Prim): Type {
     return ret
   } else {
     throw new Error(`Unknown operator ${op}`)
+  }
+}
+export function exposeAllocation(p: Program): Program {
+  return Program(exposeAllocationExp(p.body))
+}
+export function exposeAllocationExp(e: Exp): Exp {
+  switch (e.kind) {
+    case "prim":
+      if (e.op === "if")
+        return If(exposeAllocationExp(e.args[0]), exposeAllocationExp(e.args[1]), exposeAllocationExp(e.args[2]))
+      return Prim(e.op, ...e.args.map(exposeAllocationExp))
+    // TODO: Later, if e.op not in primitive list, then create a Call
+    case "var":
+    case "get":
+    case "int":
+    case "bool":
+      return e
+    case "let":
+      return Let(e.name, exposeAllocationExp(e.exp), exposeAllocationExp(e.body))
+    case "set":
+      return SetBang(e.name, exposeAllocationExp(e.exp))
+    case "begin":
+      return Begin(e.exps.map(exposeAllocationExp), exposeAllocationExp(e.body))
+    case "while":
+      return While(exposeAllocationExp(e.cond), exposeAllocationExp(e.body))
+    case "void":
+      return e
+    case "as":
+      // <one let for each element of the vector>
+      // (begin (if (< (+ (global-value free-ptr) ,bytes) (global-value fromspace-end))
+      //            (void)
+      //            (collect ,bytes))
+      //   (let (v (allocate ,len ,type))
+      //     (begin
+      //       // <one vector-set for each element of the vector>
+      //       v)))
+      assert(e.exp.kind === "prim" && e.exp.op === "vector")
+      const args = e.exp.args.map(exposeAllocationExp)
+      const vectorName = gensym()
+      const elementNames = args.map(gensym)
+      const sets = elementNames.map((n, i) => Prim("vector-set", Var(vectorName), Int(i), Var(n)))
+      const bytes = 8 + args.length * 8
+      const check = Begin(
+        [
+          If(
+            Prim("<", Prim("+", GlobalValue("free-ptr"), Int(bytes)), GlobalValue("fromspace-end")),
+            Void(),
+            Collect(bytes)
+          ),
+        ],
+        Let(vectorName, Allocate(args.length, e.type), Begin(sets, Var(vectorName)))
+      )
+      return args.reduceRight((body, el, i) => Let(elementNames[i], el, body), check)
+    case "if":
+      return If(exposeAllocationExp(e.cond), exposeAllocationExp(e.then), exposeAllocationExp(e.else))
+    case "collect":
+    case "allocate":
+    case "global-value":
+      throw new Error("Unexpected allocate/collect/global-value in exposeAllocation")
   }
 }
 /* ### Emitter ### */
@@ -272,20 +350,34 @@ export function emitExp(e: Exp): string {
       return `(while ${emitExp(e.cond)} ${emitExp(e.body)})`
     case "void":
       return `(void)`
+    case "as":
+      return `(as ${emitExp(e.exp)} ${emitType(e.type)})`
+    case "collect":
+      return `(collect ${e.bytes})`
+    case "global-value":
+      return `(global-value ${e.name})`
+    case "allocate":
+      return `(allocate ${e.len} ${emitType(e.type)})`
     case "if":
       return `[if ${emitExp(e.cond)} ${emitExp(e.then)} ${emitExp(e.else)}]`
   }
 }
 export function emitType(t: Type): string {
-  switch (t) {
-    case intType:
-      return "int"
-    case boolType:
-      return "bool"
-    case voidType:
-      return "void"
+  if (typeof t === "symbol") {
+    switch (t) {
+      case intType:
+        return "int"
+      case boolType:
+        return "bool"
+      case voidType:
+        return "void"
+    }
+    throw new Error(`Unexpected primitive type ${t.toString()}`)
+  } else {
+    assert(t.kind === "vector")
+    // TODO: Come up with a better format than davinci did
+    return `(vector ${t.types.map(emitType).join(" ")})`
   }
-  throw new Error(`Unexpected type ${t.toString()}`)
 }
 /* ### Frontend passes ###
  * 1. reparsePrimitives
@@ -324,6 +416,11 @@ function reparsePrimitivesExp(e: Exp): Exp {
       return While(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.body))
     case "void":
       return e
+    case "as":
+    case "allocate":
+    case "collect":
+    case "global-value":
+      throw new Error("Unexpected as/collect/global-value/allocate in reparsing")
     case "if":
       return If(reparsePrimitivesExp(e.cond), reparsePrimitivesExp(e.then), reparsePrimitivesExp(e.else))
   }
@@ -361,6 +458,12 @@ function uniquifyExp(e: Exp, env: AList<string, string> | undefined): Exp {
       return While(uniquifyExp(e.cond, env), uniquifyExp(e.body, env))
     case "void":
       return e
+    case "as":
+      return As(uniquifyExp(e.exp, env), e.type)
+    case "allocate":
+    case "collect":
+    case "global-value":
+      throw new Error("Unexpected allocate/collect/global-value in uniquify")
   }
 }
 
@@ -370,15 +473,18 @@ export function uncoverGet(p: Program): Program {
 
   function uncoverGetExp(e: Exp): Exp {
     switch (e.kind) {
-      case "prim":
-        return Prim(e.op, ...e.args.map(uncoverGetExp))
-      case "var":
-        return sets.has(e.name) ? GetBang(e.name) : e
       case "get":
       case "int":
       case "bool":
       case "void":
+      case "allocate":
+      case "collect":
+      case "global-value":
         return e
+      case "prim":
+        return Prim(e.op, ...e.args.map(uncoverGetExp))
+      case "var":
+        return sets.has(e.name) ? GetBang(e.name) : e
       case "if":
         return If(uncoverGetExp(e.cond), uncoverGetExp(e.then), uncoverGetExp(e.else))
       case "let":
@@ -389,6 +495,8 @@ export function uncoverGet(p: Program): Program {
         return Begin(e.exps.map(uncoverGetExp), uncoverGetExp(e.body))
       case "while":
         return While(uncoverGetExp(e.cond), uncoverGetExp(e.body))
+      case "as":
+        throw new Error("as should have been removed by exposeAllocation")
     }
   }
 }
@@ -441,6 +549,9 @@ function removeComplexOperandsExp(e: Exp): Exp {
     case "int":
     case "bool":
     case "void":
+    case "allocate":
+    case "collect":
+    case "global-value":
       return e
     case "prim": {
       if (e.op === "read") return e
@@ -468,6 +579,8 @@ function removeComplexOperandsExp(e: Exp): Exp {
       return Begin(e.exps.map(removeComplexOperandsExp), removeComplexOperandsExp(e.body))
     case "while":
       return While(removeComplexOperandsExp(e.cond), removeComplexOperandsExp(e.body))
+    case "as":
+      throw new Error("as should have been removed by exposeAllocation")
   }
 }
 function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
@@ -477,6 +590,11 @@ function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
     case "bool":
     case "void":
       return [e, []]
+    case "allocate":
+    case "collect":
+    case "global-value":
+      // TODO: Handle allocate, collect, global-value
+      return [Var("TODO"), []]
     case "prim": {
       if (e.op === "read") {
         return generateTmp(e, [])
@@ -489,6 +607,7 @@ function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
         const [e2, tmps2] = removeComplexOperandsAtom(e.args[1])
         return generateTmp(PrimAtom(e.op, e1, e2), [...tmps2, ...tmps1])
       } else {
+        // TODO: Handle vector-ref, vector-set, vector-length
         throw new Error("Unexpected number of arguments")
       }
     }
@@ -516,6 +635,8 @@ function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
       const [body1, tmpsBody] = removeComplexOperandsAtom(e.body)
       return generateTmp(While(cond1, body1), [...tmpsCond, ...tmpsBody])
     }
+    case "as":
+      throw new Error("as should have been removed by exposeAllocation")
   }
 }
 function generateTmp(e: Exp, tmps: Array<[string, Exp]>): [Atom, Array<[string, Exp]>] {

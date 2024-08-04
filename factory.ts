@@ -1,5 +1,5 @@
-import { Value } from "./core.js";
-import { AList, Graph } from "./structures.js"
+import { Type, Value } from "./core.js";
+import { Graph } from "./structures.js"
 /** for Language */
 export type Var = { kind: "var"; name: string }
 export type Prim = { kind: "prim"; op: string; args: Exp[] }
@@ -13,7 +13,12 @@ export type GetBang = { kind: "get"; name: string; }
 export type Begin = { kind: "begin"; exps: Exp[]; body: Exp }
 export type While = { kind: "while"; cond: Exp; body: Exp }
 export type Void = { kind: "void" }
-export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void
+// internal 'expressions' that really ought to be function calls
+export type As = { kind: "as"; exp: Exp; type: Type }
+export type Collect = { kind: "collect"; bytes: number }
+export type GlobalValue = { kind: "global-value"; name: string }
+export type Allocate = { kind: "allocate"; len: number, type: Type }
+export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void | As | Collect | GlobalValue | Allocate
 export type Atom = Int | Bool | Var | Void
 export type Program = {
   kind: "program"
@@ -57,6 +62,18 @@ export function While(cond: Exp, body: Exp): While {
 }
 export function Void(): Void {
   return { kind: "void" }
+}
+export function As(exp: Exp, type: Type): As {
+  return { kind: "as", exp, type }
+}
+export function Collect(bytes: number): Collect {
+  return { kind: "collect", bytes }
+}
+export function GlobalValue(name: string): GlobalValue {
+  return { kind: "global-value", name }
+}
+export function Allocate(len: number, type: Type): Allocate {
+  return { kind: "allocate", len, type }
 }
 export function If(cond: Exp, then: Exp, else_: Exp): If {
   return { kind: "if", cond, then, else: else_ }

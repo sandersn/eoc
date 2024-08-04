@@ -43,7 +43,7 @@ export function gensym() {
   return "g" + counter++
 }
 export type Value = { kind: 'int', value: number } | { kind: 'vector', values: Value[] } | { kind: 'void' }
-export type Type = symbol | { kind: "Vector"; types: Type[] }
+export type Type = symbol | { kind: "vector"; types: Type[] }
 export const intType = Symbol("Integer")
 export const boolType = Symbol("Boolean")
 export const voidType = Symbol("Void")
