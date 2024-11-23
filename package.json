@@ -5,7 +5,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "tsc && node test.js"
+    "test": "node --experimental-strip-types test.ts",
+    "build": "tsc",
+    "compile": "tsc"
   },
   "repository": {
     "type": "git",

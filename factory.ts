@@ -18,8 +18,8 @@ export type As = { kind: "as"; exp: Exp; type: Type }
 export type Collect = { kind: "collect"; bytes: number }
 export type GlobalValue = { kind: "global-value"; name: string }
 export type Allocate = { kind: "allocate"; len: number, type: Type }
-export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void | As | Collect | GlobalValue | Allocate
-export type Atom = Int | Bool | Var | Void
+export type Exp = Prim | Var | Int | Bool | Let | If | SetBang | GetBang | Begin | While | Void | As | Collect | GlobalValue | Allocate 
+export type Atom =  | Int | Bool | Var | Void
 export type Program = {
   kind: "program"
   body: Exp
@@ -88,6 +88,8 @@ export type Stmt =
   | Goto
   | { kind: "void" }
   | { kind: "if"; cond: Cmp; then: Goto; else: Goto }
+  | { kind: "prim", op: 'vector-set', args: [Atom, Int, Atom] }
+  | Collect
 export type CProgram = {
   kind: "cprogram"
   locals: Map<string, Value>
@@ -118,7 +120,8 @@ export type Reg = { kind: "reg"; reg: string }
 export type ByteReg = { kind: "bytereg"; bytereg: "ah" | "al" | "bh" | "bl" | "ch" | "cl" | "dh" | "dl" }
 export type Deref = { kind: "deref"; reg: string; offset: number }
 export type Imm = { kind: "imm"; int: number }
-export type Ref = Var | Imm | Reg | ByteReg | Deref
+export type Global = { kind: "global", name: string }
+export type Ref = Var | Imm | Reg | ByteReg | Deref | Global
 export type Ops = "addq" | "subq" | "negq" | "xorq" | "cmpq" | "movq" | "movzbq" | "pushq" | "popq"
 export type Cc = "e" | "l" | "le" | "g" | "ge"
 export type Instr =
@@ -155,6 +158,9 @@ export function Deref(reg: string, offset: number): Deref {
 export function Imm(int: number): Imm {
   return { kind: "imm", int }
 }
+export function Global(name: string): Global {
+  return { kind: "global", name }
+}
 export function equalRef(r1: Ref, r2: Ref): boolean {
   if (r1.kind !== r2.kind) return false
   switch (r1.kind) {
@@ -168,6 +174,8 @@ export function equalRef(r1: Ref, r2: Ref): boolean {
       return r1.name === (r2 as Var).name
     case "deref":
       return r1.reg === (r2 as Deref).reg && r1.offset === (r2 as Deref).offset
+    case "global":
+      return r1.name === (r2 as Global).name
   }
 }
 export function Instr(op: "set", cc: Cc, arg: Ref): Instr

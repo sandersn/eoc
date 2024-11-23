@@ -1,4 +1,4 @@
-import { assertDefined, box, Value } from "./core.js"
+import { assertDefined, box, gensym, Value } from "./core.js"
 import assert from "node:assert"
 import {
   Assign,
@@ -27,6 +27,10 @@ import {
   Jmp,
   JmpIf,
   Cc,
+  Atom,
+  Collect,
+  Deref,
+  Global,
 } from "./factory.js"
 import { interpExp, emitExp } from "./language.js"
 import { Graph, alistFromMap } from "./structures.js"
@@ -89,9 +93,25 @@ function selectInstructionsExp(e: Exp, to: Ref): Instr[] {
     case "as":
       throw new Error(`Unexpected ${e.kind} on rhs of assignment.`)
     case "allocate":
-    case "collect":
+      let work = 0
+      assert(typeof e.type !== "symbol")
+      for (const t of e.type.types) {
+        // mark vector types with 1; all others are instrinsic represented as symbols
+        work |= typeof t === "symbol" ? 0 : 1
+        work <<= 1
+      }
+      const tag = (e.len << 1) | (work << 6)
+      // based on the type
+      return [
+        Instr("movq", Global("free_ptr"), Reg("r11")),
+        Instr("addq", Imm(8 * (e.len + 1)), Global("free_ptr")),
+        Instr("movq", Imm(tag), Deref("r11", 0)),
+        Instr("movq", Reg("r11"), to),
+      ]
     case "global-value":
-      throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
+      return [Instr("movq", Global(e.name), to)]
+    case "collect":
+      throw new Error("Don't know how to handle collect in selectInstructionsExp.")
     case "void":
       return [Instr("movq", Imm(0), to)]
   }
@@ -130,8 +150,18 @@ function selectInstructionsPrim(e: Prim, to: Ref): Instr[] {
         Instr("set", selectInstructionsOp(e.op), ByteReg("al")),
         Instr("movzbq", ByteReg("al"), to),
       ]
+    case "vector-ref":
+      // TODO: Remove r11 from the available registers in the register allocator
+      const size = selectInstructionsAtom(e.args[1])
+      assert(size.kind === "imm")
+      return [
+        Instr("movq", selectInstructionsAtom(e.args[0]), Reg("r11")),
+        Instr("movq", Deref("r11", 8 * (size.int + 1)), to),
+      ]
+    case "vector-length":
+      throw new Error("vector-length not done yet in selectInstructionsPrim")
     default:
-      throw new Error("Unexpected primitive")
+      throw new Error(`Unexpected primitive ${e.op}`)
   }
 }
 function selectInstructionsOp(op: string): Cc {
@@ -166,6 +196,23 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
       ]
     case "seq":
       return [...selectInstructionsStmt(s.head), ...selectInstructionsStmt(s.tail)]
+    case "prim":
+      if (s.op !== "vector-set") throw new Error(`Unexpected prim ${emitExp(s)}`)
+      const size = selectInstructionsAtom(s.args[1])
+      assert(size.kind === "imm")
+      return [
+        Instr("movq", selectInstructionsAtom(s.args[0]), Reg("r11")),
+        Instr("movq", selectInstructionsAtom(s.args[2]), Deref("r11", 8 * (size.int + 1))),
+        // don't need `movq $0` to because compiler prevents vector-set in selectInstrunctionsPrim
+      ]
+    case "collect":
+      // TODO: What is the int in callq?
+      // TODO: Remove r15 from the available registers in the register allocator
+      return [
+        Instr("movq", Reg("r15"), Reg("rdi")),
+        Instr("movq", Imm(s.bytes), Reg("rsi")),
+        Callq("collect", 0)
+      ]
     case "void":
       throw new Error(`Unexpected ${s.kind} on rhs of assignment.`)
   }
@@ -190,7 +237,7 @@ function selectInstructionsAtom(e: Exp): Ref {
     case "allocate":
     case "collect":
     case "global-value":
-      throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
+      throw new Error("Don't know how to handle allocate/collect/global-value in selectInstructionsAtom.")
     case "void":
       return Imm(0)
   }
@@ -217,6 +264,14 @@ export function interpProgram(p: CProgram): number {
         return interpStatement(assertDefined(p.body.get(e.label)))
       case "return":
         return interpExp(e.exp, env2)
+      case "prim":
+        if (e.op !== "vector-set") throw new Error(`Unexpected prim ${emitExp(e)}`)
+        const [lhs, i, rhs] = e.args
+        const v = interpExp(lhs, env2)
+        assert(v.kind === "vector", `Expected vector, got ${e.kind}`)
+        v.values[i.val] = interpExp(rhs, env2)
+        return { kind: "void" }
+      case "collect":
       case "void":
         return { kind: "void" }
     }
@@ -234,8 +289,13 @@ function emitStatement(e: Stmt): string {
       return `\tgoto ${e.label};\n`
     case "if":
       return `\tif ${emitExp(e.cond)} ${emitStatement(e.then)}\telse ${emitStatement(e.else)}`
+    case "prim":
+      if (e.op !== "vector-set") throw new Error(`Unexpected prim ${emitExp(e)}`)
+      return `\tvector-set ${emitExp(e.args[0])} ${e.args[1].val} ${emitExp(e.args[2])}\n`
     case "void":
-      return "void;"
+      return "\tvoid;\n"
+    case "collect":
+      return `\tcollect ${e.bytes};\n`
   }
 }
 export function emitProgram(p: CProgram): string {
@@ -257,6 +317,8 @@ export function explicateControl(p: Program): CProgram {
       case "int":
       case "bool":
       case "prim":
+      case "allocate":
+      case "global-value":
         return Seq(Assign(Var(x), e), k)
       case "if":
         k = createBlock(k)
@@ -286,10 +348,8 @@ export function explicateControl(p: Program): CProgram {
         return k
       case "as":
         throw new Error("as should have been removed by exposeAllocation")
-      case "allocate":
       case "collect":
-      case "global-value":
-        throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
+        return Seq(Collect(e.bytes), k)
     }
   }
   function explicateTail(e: Exp): Stmt {
@@ -370,6 +430,12 @@ export function explicateControl(p: Program): CProgram {
           case "and":
           case "or":
             throw new Error("and/or not expected in this pass of the compiler")
+          case "vector-ref":
+            const result = gensym()
+            return explicateAssign(cond, result, explicatePred(Var(result), then, else_))
+          case "vector-set":
+          case "vector-length":
+            throw new Error("Type checker should prevent vector operations from appearing here.")
           default:
             throw new Error(`op ${cond.op} not expected in this pass of the compiler`)
         }
@@ -400,14 +466,20 @@ export function explicateControl(p: Program): CProgram {
   }
   function explicateEffect(e: Exp, k: Stmt): Stmt {
     switch (e.kind) {
+      case "prim":
+        if (e.op === "vector-set") {
+          return Seq({ kind: e.kind, op: e.op, args: e.args as [Atom, Int, Atom] }, k)
+        }
       case "var":
       case "int":
       case "bool":
-      case "prim":
+      case "allocate":
+      case "global-value":
       case "get":
         // TODO: Could instead return k to eliminate the pure code
         throw new Error("Should not have expressions used for their effects.")
       case "if":
+        k = createBlock(k)
         return explicatePred(e.cond, explicateEffect(e.then, k), explicateEffect(e.else, k))
       case "let":
         return explicateAssign(e.exp, e.name, explicateEffect(e.body, k))
@@ -430,10 +502,8 @@ export function explicateControl(p: Program): CProgram {
         return k
       case "as":
         throw new Error("as should have been removed by exposeAllocation")
-      case "allocate":
       case "collect":
-      case "global-value":
-        throw new Error("Don't know how to handle allocate/collect/global-value in explicateEffect.")
+        return Seq(e, k)
     }
   }
 }

@@ -37,6 +37,7 @@ const numbers = {
   r9: 5,
   r10: 6,
   rax: -1,
+  // TODO: remove r11 from the available registers (don't rembmer how to do this)
   r11: -4, // caller save (but I don't think you have to do anything; the caller will have to push them if they have used them, but they wouldn't)
 }
 const registers = ["rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "rbx", "r12", "r13", "r14"]
@@ -96,34 +97,6 @@ function patchInstructionsInstr(i: Instr): Instr[] {
     case "jmp":
     case "jmpif":
       return [i]
-  }
-}
-export function buildInterference(p: X86Program): void {
-  for (const [_, block] of p.blocks) {
-    interferenceBlock(block, p.info.conflicts)
-  }
-}
-function interferenceBlock(block: Block, conflicts: Graph<string>): void {
-  for (let i = 0; i < block.instructions.length; i++) {
-    const instr = block.instructions[i]
-    const live = block.info.references[i + 1]
-    if (instr.kind === "instr" && (instr.op === "movq" || instr.op === "movzbq")) {
-      for (const v of live) {
-        const source = nameOfRef(instr.args[0])
-        const target = nameOfRef(instr.args[1])
-        if (target && v !== source && v !== target) {
-          conflicts.addEdge(target, v)
-        }
-      }
-    } else {
-      for (const d of liveWriteInstr(instr)) {
-        for (const v of live) {
-          if (v !== d) {
-            conflicts.addEdge(d, v)
-          }
-        }
-      }
-    }
   }
 }
 // TODO: There can be completely unused blocks generated in the C program.
@@ -271,10 +244,39 @@ function liveWriteInstr(i: Instr): string[] {
       return []
   }
 }
+export function buildInterference(p: X86Program): void {
+  for (const [_, block] of p.blocks) {
+    interferenceBlock(block, p.info.conflicts)
+  }
+}
+function interferenceBlock(block: Block, conflicts: Graph<string>): void {
+  for (let i = 0; i < block.instructions.length; i++) {
+    const instr = block.instructions[i]
+    const live = block.info.references[i + 1]
+    if (instr.kind === "instr" && (instr.op === "movq" || instr.op === "movzbq")) {
+      for (const v of live) {
+        const source = nameOfRef(instr.args[0])
+        const target = nameOfRef(instr.args[1])
+        if (target && v !== source && v !== target) {
+          conflicts.addEdge(target, v)
+        }
+      }
+    } else {
+      for (const d of liveWriteInstr(instr)) {
+        for (const v of live) {
+          if (v !== d) {
+            conflicts.addEdge(d, v)
+          }
+        }
+      }
+    }
+  }
+}
 export function allocateRegisters(p: X86Program): void {
   // replace all variables with registers, similar to assignHomes
   //   TODO: repurpose assignHomes/Ref to do this, but pass in homes instead of locals
   //   Best way to do this is to rewrite assignHomes to use homes, and preprocess locals to do that, then test with existing tests
+  // TODO: remove r11 from available registers
   for (const [_, block] of p.blocks) {
     allocateRegisterBlock(block, p.info.conflicts, p.info.homes)
   }
@@ -364,6 +366,7 @@ function assignHomesRef(info: Map<string, Reg | Deref>, a: Ref): Ref {
     case "reg":
     case "deref":
     case "bytereg":
+    case "global":
       return a
     case "var":
       return assertDefined(info.get(a.name))
@@ -404,6 +407,8 @@ function emitRef(r: Ref): string {
       return `%${r.bytereg}`
     case "deref":
       return `${r.offset}(%${r.reg})`
+    case "global":
+      return `${r.name}(%rip)`
   }
 }
 export function interpProgram(xp: X86Program) {
@@ -514,6 +519,8 @@ export function interpProgram(xp: X86Program) {
         return registers.get(r.reg) ?? 0
       case "bytereg":
         return byteregisters.get(r.bytereg) ?? 0
+      case "global":
+        throw new Error("global not done yet, need to calculate offset of global from ip")
       case "deref":
         return assertDefined(stack[(registers.get(r.reg) ?? 0) + r.offset])
     }
@@ -536,6 +543,8 @@ export function interpProgram(xp: X86Program) {
         break
       case "imm":
         throw new Error("not a ref")
+      case "global":
+        throw new Error("Don't know how to write globals.")
     }
   }
 }
@@ -550,6 +559,9 @@ function nameOfRef(r: Ref): string | undefined {
     case "reg":
     case "deref":
       return r.reg
+    case "global":
+      // return r.name
+      throw new Error("Don't know if r.name is the right thing to return for globals' interference.")
   }
 }
 function nameOfByteRegContainer(r: Ref) {

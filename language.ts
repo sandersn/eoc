@@ -265,65 +265,6 @@ function typeCheckOp(op: string, args: Type[], e: Prim): Type {
     throw new Error(`Unknown operator ${op}`)
   }
 }
-export function exposeAllocation(p: Program): Program {
-  return Program(exposeAllocationExp(p.body))
-}
-export function exposeAllocationExp(e: Exp): Exp {
-  switch (e.kind) {
-    case "prim":
-      if (e.op === "if")
-        return If(exposeAllocationExp(e.args[0]), exposeAllocationExp(e.args[1]), exposeAllocationExp(e.args[2]))
-      return Prim(e.op, ...e.args.map(exposeAllocationExp))
-    // TODO: Later, if e.op not in primitive list, then create a Call
-    case "var":
-    case "get":
-    case "int":
-    case "bool":
-      return e
-    case "let":
-      return Let(e.name, exposeAllocationExp(e.exp), exposeAllocationExp(e.body))
-    case "set":
-      return SetBang(e.name, exposeAllocationExp(e.exp))
-    case "begin":
-      return Begin(e.exps.map(exposeAllocationExp), exposeAllocationExp(e.body))
-    case "while":
-      return While(exposeAllocationExp(e.cond), exposeAllocationExp(e.body))
-    case "void":
-      return e
-    case "as":
-      // <one let for each element of the vector>
-      // (begin (if (< (+ (global-value free-ptr) ,bytes) (global-value fromspace-end))
-      //            (void)
-      //            (collect ,bytes))
-      //   (let (v (allocate ,len ,type))
-      //     (begin
-      //       // <one vector-set for each element of the vector>
-      //       v)))
-      assert(e.exp.kind === "prim" && e.exp.op === "vector")
-      const args = e.exp.args.map(exposeAllocationExp)
-      const vectorName = gensym()
-      const elementNames = args.map(gensym)
-      const sets = elementNames.map((n, i) => Prim("vector-set", Var(vectorName), Int(i), Var(n)))
-      const bytes = 8 + args.length * 8
-      const check = Begin(
-        [
-          If(
-            Prim("<", Prim("+", GlobalValue("free-ptr"), Int(bytes)), GlobalValue("fromspace-end")),
-            Void(),
-            Collect(bytes)
-          ),
-        ],
-        Let(vectorName, Allocate(args.length, e.type), Begin(sets, Var(vectorName)))
-      )
-      return args.reduceRight((body, el, i) => Let(elementNames[i], el, body), check)
-    case "if":
-      return If(exposeAllocationExp(e.cond), exposeAllocationExp(e.then), exposeAllocationExp(e.else))
-    case "collect":
-    case "allocate":
-    case "global-value":
-      throw new Error("Unexpected allocate/collect/global-value in exposeAllocation")
-  }
-}
 /* ### Emitter ### */
 export function emitProgram(p: Program): string {
   return emitExp(p.body)
@@ -382,8 +323,9 @@ export function emitType(t: Type): string {
 /* ### Frontend passes ###
  * 1. reparsePrimitives
  * 2. uniquify
- * 3. uncoverGet
- * 4. removeComplexOperands
+ * 3. exposeAllocation
+ * 4. uncoverGet
+ * 5. removeComplexOperands
  */
 /** Convert primitive nodes to ifs and calls as needed */
 export function reparsePrimitives(p: Program): Program {
@@ -466,7 +408,65 @@ function uniquifyExp(e: Exp, env: AList<string, string> | undefined): Exp {
       throw new Error("Unexpected allocate/collect/global-value in uniquify")
   }
 }
-
+export function exposeAllocation(p: Program): Program {
+  return Program(exposeAllocationExp(p.body))
+}
+export function exposeAllocationExp(e: Exp): Exp {
+  switch (e.kind) {
+    case "prim":
+      if (e.op === "if")
+        return If(exposeAllocationExp(e.args[0]), exposeAllocationExp(e.args[1]), exposeAllocationExp(e.args[2]))
+      return Prim(e.op, ...e.args.map(exposeAllocationExp))
+    // TODO: Later, if e.op not in primitive list, then create a Call
+    case "var":
+    case "get":
+    case "int":
+    case "bool":
+      return e
+    case "let":
+      return Let(e.name, exposeAllocationExp(e.exp), exposeAllocationExp(e.body))
+    case "set":
+      return SetBang(e.name, exposeAllocationExp(e.exp))
+    case "begin":
+      return Begin(e.exps.map(exposeAllocationExp), exposeAllocationExp(e.body))
+    case "while":
+      return While(exposeAllocationExp(e.cond), exposeAllocationExp(e.body))
+    case "void":
+      return e
+    case "as":
+      // <one let for each element of the vector>
+      // (begin (if (< (+ (global-value free-ptr) ,bytes) (global-value fromspace-end))
+      //            (void)
+      //            (collect ,bytes))
+      //   (let (v (allocate ,len ,type))
+      //     (begin
+      //       // <one vector-set for each element of the vector>
+      //       v)))
+      assert(e.exp.kind === "prim" && e.exp.op === "vector")
+      const args = e.exp.args.map(exposeAllocationExp)
+      const vectorName = gensym()
+      const elementNames = args.map(gensym)
+      const sets = elementNames.map((n, i) => Prim("vector-set", Var(vectorName), Int(i), Var(n)))
+      const bytes = 8 + args.length * 8
+      const check = Begin(
+        [
+          If(
+            Prim("<", Prim("+", GlobalValue("free-ptr"), Int(bytes)), GlobalValue("fromspace-end")),
+            Void(),
+            Collect(bytes)
+          ),
+        ],
+        Let(vectorName, Allocate(args.length, e.type), Begin(sets, Var(vectorName)))
+      )
+      return args.reduceRight((body, el, i) => Let(elementNames[i], el, body), check)
+    case "if":
+      return If(exposeAllocationExp(e.cond), exposeAllocationExp(e.then), exposeAllocationExp(e.else))
+    case "collect":
+    case "allocate":
+    case "global-value":
+      throw new Error("Unexpected allocate/collect/global-value in exposeAllocation")
+  }
+}
 export function uncoverGet(p: Program): Program {
   const sets = collectSet(p.body)
   return Program(uncoverGetExp(p.body))
@@ -562,6 +562,11 @@ function removeComplexOperandsExp(e: Exp): Exp {
         const [arg1, tmps1] = removeComplexOperandsAtom(e.args[0])
         const [arg2, tmps2] = removeComplexOperandsAtom(e.args[1])
         return generateLets([...tmps2, ...tmps1], PrimAtom(e.op, arg1, arg2))
+      } else if (e.args.length === 3) {
+        const [arg1, tmps1] = removeComplexOperandsAtom(e.args[0])
+        const [arg2, tmps2] = removeComplexOperandsAtom(e.args[1])
+        const [arg3, tmps3] = removeComplexOperandsAtom(e.args[2])
+        return generateLets([...tmps3, ...tmps2, ...tmps1], PrimAtom(e.op, arg1, arg2, arg3))
       } else {
         throw new Error("Unexpected number of arguments")
       }
@@ -593,8 +598,7 @@ function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
     case "allocate":
     case "collect":
     case "global-value":
-      // TODO: Handle allocate, collect, global-value
-      return [Var("TODO"), []]
+      return generateTmp(e, [])
     case "prim": {
       if (e.op === "read") {
         return generateTmp(e, [])
@@ -606,8 +610,12 @@ function removeComplexOperandsAtom(e: Exp): [Atom, Array<[string, Exp]>] {
         const [e1, tmps1] = removeComplexOperandsAtom(e.args[0])
         const [e2, tmps2] = removeComplexOperandsAtom(e.args[1])
         return generateTmp(PrimAtom(e.op, e1, e2), [...tmps2, ...tmps1])
+      } else if (e.args.length === 3) {
+        const [e1, tmps1] = removeComplexOperandsAtom(e.args[0])
+        const [e2, tmps2] = removeComplexOperandsAtom(e.args[1])
+        const [e3, tmps3] = removeComplexOperandsAtom(e.args[2])
+        return generateTmp(PrimAtom(e.op, e1, e2, e3), [...tmps3,...tmps2, ...tmps1])
       } else {
-        // TODO: Handle vector-ref, vector-set, vector-length
         throw new Error("Unexpected number of arguments")
       }
     }

@@ -21,9 +21,6 @@ function runAssignHomes(program: Program, stage: Stage, verbose = false) {
     if (verbose) console.log(l.emitProgram(parsedProgram))
     return l.interpProgram(parsedProgram)
   }
-  if (verbose) {
-    console.log(l.emitProgram(exposeAllocation(uniquifyProgram(parsedProgram))))
-  }
   const p = explicateControl(removeComplexOperands(uncoverGet(exposeAllocation(uniquifyProgram(parsedProgram)))))
   if (stage === "c") {
     if (verbose) console.log(c.emitProgram(p))
@@ -120,7 +117,7 @@ testLvar("vector-from-book",
     (if (vector-ref t 1)
       (+ (vector-ref t 0)
          (vector-ref (vector-ref t 2) 0))
-      44))`, 'c', true)
+      44))`, 'x', true)
 // TODO: Still need to test vector-set and vector-length
 // TODO: Function to test type checking failure
 // TODO: Test get/set unbound things
