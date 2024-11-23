@@ -1,5 +1,5 @@
 import assert from "node:assert"
-import { assertDefined } from "./core.js"
+import { assertDefined } from "./core.ts"
 export class Graph<T> {
   g: Map<T, Set<T>> = new Map()
   addVertex(v: T) {

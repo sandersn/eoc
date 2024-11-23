@@ -1,7 +1,10 @@
 import assert from "node:assert"
-import { Program, Exp, Prim, Int, Bool, If, Let, Var, Void, Begin, SetBang } from "./factory.js"
-import { Type, intType, boolType, gensym } from "./core.js"
-import { alist, alength, AList } from "./structures.js"
+import type { AList } from './structures.ts'
+import type { Exp } from './factory.ts'
+import { Program, Prim, Int, Bool, If, Let, Var, Void, Begin, SetBang } from "./factory.ts"
+import type { Type } from './core.ts'
+import { intType, boolType, gensym } from "./core.ts"
+import { alist, alength } from "./structures.ts"
 // TODO: (almost) everything in here should use delayed evaluation
 // analyseControlFlow is slow for large inputs. Probably quadratic, cubic or even worse.
 //    to get around this for now, keep a blockcount, and reduce the probability of block-producing expressions when it is exceeded

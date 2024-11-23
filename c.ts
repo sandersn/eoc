@@ -1,39 +1,34 @@
-import { assertDefined, box, gensym, Value } from "./core.js"
+import type { Type, Value } from './core.ts'
+import { assertDefined, box, gensym, intType } from "./core.ts"
 import assert from "node:assert"
+import type { Exp, Cc, Cmp, Atom, Ref, Stmt, Program, X86Program } from "./factory.ts"
 import {
+  Seq,
   Assign,
   Var,
-  Return,
-  Seq,
-  Exp,
-  Cmp,
-  Prim,
-  Ref,
-  Imm,
-  Int,
+  CProgram,
+  equalRef,
   Reg,
   ByteReg,
-  Stmt,
-  Program,
-  CProgram,
-  X86Program,
+  Prim,
+  Imm,
   Instr,
-  Block,
-  Callq,
-  Goto,
-  IfStmt,
+  Int,
   Bool,
-  equalRef,
+  Block,
+  Global,
+  Deref,
   Jmp,
   JmpIf,
-  Cc,
-  Atom,
+  Callq,
+  Return,
+  IfStmt,
+  Goto,
   Collect,
-  Deref,
-  Global,
-} from "./factory.js"
-import { interpExp, emitExp } from "./language.js"
-import { Graph, alistFromMap } from "./structures.js"
+} from "./factory.ts"
+import { interpExp, emitExp, typeCheckExp } from "./language.ts"
+import type { AList } from "./structures.ts"
+import { Graph, alistFromMap, alist } from "./structures.ts"
 /** TODO: Should maybe type check (but surely that's the responsiblity of the frontend?) */
 function bind(blocks: [string, Stmt][]): Map<string, Value> {
   const env: Map<string, Value> = new Map()
@@ -208,11 +203,7 @@ function selectInstructionsStmt(s: Stmt): Instr[] {
     case "collect":
       // TODO: What is the int in callq?
       // TODO: Remove r15 from the available registers in the register allocator
-      return [
-        Instr("movq", Reg("r15"), Reg("rdi")),
-        Instr("movq", Imm(s.bytes), Reg("rsi")),
-        Callq("collect", 0)
-      ]
+      return [Instr("movq", Reg("r15"), Reg("rdi")), Instr("movq", Imm(s.bytes), Reg("rsi")), Callq("collect", 0)]
     case "void":
       throw new Error(`Unexpected ${s.kind} on rhs of assignment.`)
   }
@@ -307,11 +298,12 @@ export function emitProgram(p: CProgram): string {
 }
 export function explicateControl(p: Program): CProgram {
   const blocks: [string, Stmt][] = []
-  const start = explicateTail(p.body)
+  const types: Map<string, Type> = new Map()
+  const start = explicateTail(p.body, undefined)
   blocks.push(["start", start])
-  return CProgram(bind(blocks), new Map(blocks))
+  return CProgram(types, bind(blocks), new Map(blocks))
 
-  function explicateAssign(e: Exp, x: string, k: Stmt): Stmt {
+  function explicateAssign(e: Exp, x: string, k: Stmt, env: AList<string, Type> | undefined): Stmt {
     switch (e.kind) {
       case "var":
       case "int":
@@ -319,30 +311,35 @@ export function explicateControl(p: Program): CProgram {
       case "prim":
       case "allocate":
       case "global-value":
+        types.set(x, typeCheckExp(e, env)[1])
         return Seq(Assign(Var(x), e), k)
       case "if":
         k = createBlock(k)
-        return explicatePred(e.cond, explicateAssign(e.then, x, k), explicateAssign(e.else, x, k))
+        return explicatePred(e.cond, explicateAssign(e.then, x, k, env), explicateAssign(e.else, x, k, env), env)
       case "let": {
-        return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k))
+        const [_, type] = typeCheckExp(e.exp, env)
+        return explicateAssign(e.exp, e.name, explicateAssign(e.body, x, k, alist(e.name, type, env)), env)
       }
       case "set":
-        // TOD: Pretty sure e.exp needs to recur with an explicate* (same for other entries)
+        // TODO: Pretty sure e.exp needs to recur with an explicate* (same for other entries)
+        types.set(x, intType)
+        types.set(e.name, typeCheckExp(e.exp, env)[1])
         return Seq(Assign(Var(x), Int(0)), Seq(Assign(Var(e.name), e.exp), k))
       case "get":
         throw new Error("removeComplexOperands should remove get")
       case "begin": {
-        let body = explicateAssign(e.body, x, k)
+        let body = explicateAssign(e.body, x, k, env)
         for (let i = e.exps.length - 1; i >= 0; i--) {
-          body = explicateEffect(e.exps[i], body)
+          body = explicateEffect(e.exps[i], body, env)
         }
         return body
       }
       case "while":
         const label = genLabel("block")
         const loop = Goto(label)
-        const body = explicateEffect(e.body, loop)
-        blocks.push([label, explicatePred(e.cond, body, k)])
+        const body = explicateEffect(e.body, loop, env)
+        blocks.push([label, explicatePred(e.cond, body, k, env)])
+        types.set(x, intType)
         return Seq(Assign(Var(x), Int(0)), loop)
       case "void":
         return k
@@ -352,7 +349,7 @@ export function explicateControl(p: Program): CProgram {
         return Seq(Collect(e.bytes), k)
     }
   }
-  function explicateTail(e: Exp): Stmt {
+  function explicateTail(e: Exp, env: AList<string, Type> | undefined): Stmt {
     switch (e.kind) {
       case "var":
       case "int":
@@ -360,37 +357,44 @@ export function explicateControl(p: Program): CProgram {
       case "prim":
         return Return(e)
       case "if":
-        return explicatePred(e.cond, explicateTail(e.then), explicateTail(e.else))
+        return explicatePred(e.cond, explicateTail(e.then, env), explicateTail(e.else, env), env)
       case "let": {
-        const tail = explicateTail(e.body)
+        const [_, type] = typeCheckExp(e.exp, env)
+        const tail = explicateTail(e.body, alist(e.name, type, env))
         switch (tail.kind) {
           case "seq":
           case "return":
           case "goto":
-            return explicateAssign(e.exp, e.name, tail)
+            return explicateAssign(e.exp, e.name, tail, env)
           case "if":
-            return explicateAssign(e.exp, e.name, explicatePred(tail.cond, tail.then, tail.else))
+            return explicateAssign(
+              e.exp,
+              e.name,
+              explicatePred(tail.cond, tail.then, tail.else, alist(e.name, type, env)),
+              env
+            )
           case "assign":
             throw new Error("Unexpected assign")
         }
       }
       case "set":
         // TODO: This is probably wrong (and should be prevented by the type checker in any case)
+        types.set(e.name, typeCheckExp(e.exp, env)[1])
         return Assign(Var(e.name), e.exp)
       case "get":
         throw new Error("removeComplexOperands should remove get")
       case "begin":
-        let body = explicateTail(e.body)
+        let body = explicateTail(e.body, env)
         for (let i = e.exps.length - 1; i >= 0; i--) {
-          body = explicateEffect(e.exps[i], body)
+          body = explicateEffect(e.exps[i], body, env)
         }
         return body
       case "while": {
         // TODO: This is probably wrong (and should be prevented by the type checker in any case)
         const label = genLabel("block")
         const loop = Goto(label)
-        const body = explicateEffect(e.body, loop)
-        blocks.push([label, explicatePred(e.cond, body, Return(Int(0)))])
+        const body = explicateEffect(e.body, loop, env)
+        blocks.push([label, explicatePred(e.cond, body, Return(Int(0)), env)])
         return loop
       }
       case "void":
@@ -409,7 +413,7 @@ export function explicateControl(p: Program): CProgram {
     blocks.push([label, k])
     return Goto(label)
   }
-  function explicatePred(cond: Exp, then: Stmt, else_: Stmt): Stmt {
+  function explicatePred(cond: Exp, then: Stmt, else_: Stmt, env: AList<string, Type> | undefined): Stmt {
     switch (cond.kind) {
       case "var":
         return IfStmt(Prim("==", cond, Bool(true)), createBlock(then), createBlock(else_))
@@ -426,13 +430,13 @@ export function explicateControl(p: Program): CProgram {
           case "<=":
             return IfStmt(cond as Cmp, createBlock(then), createBlock(else_))
           case "not":
-            return explicatePred(cond.args[0], else_, then)
+            return explicatePred(cond.args[0], else_, then, env)
           case "and":
           case "or":
             throw new Error("and/or not expected in this pass of the compiler")
           case "vector-ref":
             const result = gensym()
-            return explicateAssign(cond, result, explicatePred(Var(result), then, else_))
+            return explicateAssign(cond, result, explicatePred(Var(result), then, else_, env), env)
           case "vector-set":
           case "vector-length":
             throw new Error("Type checker should prevent vector operations from appearing here.")
@@ -442,13 +446,24 @@ export function explicateControl(p: Program): CProgram {
       case "if":
         then = createBlock(then)
         else_ = createBlock(else_)
-        return explicatePred(cond.cond, explicatePred(cond.then, then, else_), explicatePred(cond.else, then, else_))
+        return explicatePred(
+          cond.cond,
+          explicatePred(cond.then, then, else_, env),
+          explicatePred(cond.else, then, else_, env),
+          env
+        )
       case "let":
-        return explicateAssign(cond.exp, cond.name, explicatePred(cond.body, then, else_))
+        const [_, type] = typeCheckExp(cond.exp, env)
+        return explicateAssign(
+          cond.exp,
+          cond.name,
+          explicatePred(cond.body, then, else_, alist(cond.name, type, env)),
+          env
+        )
       case "begin": {
-        let body = explicatePred(cond.body, then, else_)
+        let body = explicatePred(cond.body, then, else_, env)
         for (let i = cond.exps.length - 1; i >= 0; i--) {
-          body = explicateEffect(cond.exps[i], body)
+          body = explicateEffect(cond.exps[i], body, env)
         }
         return body
       }
@@ -464,7 +479,7 @@ export function explicateControl(p: Program): CProgram {
         throw new Error("Don't know how to handle allocate/collect/global-value in explicatePred.")
     }
   }
-  function explicateEffect(e: Exp, k: Stmt): Stmt {
+  function explicateEffect(e: Exp, k: Stmt, env: AList<string, Type> | undefined): Stmt {
     switch (e.kind) {
       case "prim":
         if (e.op === "vector-set") {
@@ -480,23 +495,24 @@ export function explicateControl(p: Program): CProgram {
         throw new Error("Should not have expressions used for their effects.")
       case "if":
         k = createBlock(k)
-        return explicatePred(e.cond, explicateEffect(e.then, k), explicateEffect(e.else, k))
+        return explicatePred(e.cond, explicateEffect(e.then, k, env), explicateEffect(e.else, k, env), env)
       case "let":
-        return explicateAssign(e.exp, e.name, explicateEffect(e.body, k))
+        const [_, type] = typeCheckExp(e.exp, env)
+        return explicateAssign(e.exp, e.name, explicateEffect(e.body, k, alist(e.name, type, env)), env)
       case "set":
-        return explicateAssign(e.exp, e.name, k)
+        return explicateAssign(e.exp, e.name, k, env)
       case "begin": {
-        let body = explicateEffect(e.body, k)
+        let body = explicateEffect(e.body, k, env)
         for (let i = e.exps.length - 1; i >= 0; i--) {
-          body = explicateEffect(e.exps[i], body)
+          body = explicateEffect(e.exps[i], body, env)
         }
         return body
       }
       case "while":
         const label = genLabel("block")
         const loop = Goto(label)
-        const body = explicateEffect(e.body, loop)
-        blocks.push([label, explicatePred(e.cond, body, k)])
+        const body = explicateEffect(e.body, loop, env)
+        blocks.push([label, explicatePred(e.cond, body, k, env)])
         return loop
       case "void":
         return k

@@ -1,26 +1,27 @@
 import assert from "node:assert"
-import { Int, Bool, type Exp, Let, Var, Prim, SetBang, Begin, While, Void } from "./factory.js"
-enum Token {
-  LParen,
-  RParen,
-  Let,
-  Set,
-  Begin,
-  While,
-  Void, // TODO: Maybe this should be a function call
-  Identifier,
-  True,
-  False,
-  Number,
-  Plus,
-  Minus,
-  Lt,
-  Gt,
-  Gte,
-  Lte,
-  EqEq,
-  EOF,
+import { Int, Bool, type Exp, Let, Var, Prim, SetBang, Begin, While, Void } from "./factory.ts"
+const Token = {
+  LParen: 0,
+  RParen: 1,
+  Let: 2,
+  Set: 3,
+  Begin: 4,
+  While: 5,
+  Void: 6, // TODO: Maybe this should be a function call
+  Identifier: 7,
+  True: 8,
+  False: 9,
+  Number: 10,
+  Plus: 11,
+  Minus: 12,
+  Lt: 13,
+  Gt: 14,
+  Gte: 15,
+  Lte: 16,
+  EqEq: 17,
+  EOF: 18,
 }
+type Token = number
 const keywords = {
   let: Token.Let,
   set: Token.Set,
@@ -139,7 +140,7 @@ export default function parse(sexp: string) {
       case Token.Identifier:
         return Var(lexer.value())
       default:
-        throw new Error(`Unexpected token at ${lexer.pos()}: ${Token[t]} [${sexp.slice(lexer.pos())}]`)
+        throw new Error(`Unexpected token at ${lexer.pos()}: ${t} [${sexp.slice(lexer.pos())}]`)
     }
   }
   function parseLet(): Exp {

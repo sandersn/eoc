@@ -1,5 +1,5 @@
-import { Type, Value } from "./core.js";
-import { Graph } from "./structures.js"
+import type { Type, Value } from './core.ts'
+import { Graph } from "./structures.ts"
 /** for Language */
 export type Var = { kind: "var"; name: string }
 export type Prim = { kind: "prim"; op: string; args: Exp[] }
@@ -93,6 +93,7 @@ export type Stmt =
 export type CProgram = {
   kind: "cprogram"
   locals: Map<string, Value>
+  env: Map<string, Type>
   body: Map<string, Stmt>
 }
 export function Assign(v: Var, exp: Exp): Stmt {
@@ -110,8 +111,8 @@ export function Goto(label: string): Goto {
 export function IfStmt(cond: Cmp, then: Goto, else_: Goto): Stmt {
   return { kind: "if", cond, then, else: else_ }
 }
-export function CProgram(locals: Map<string, Value>, body: Map<string, Stmt>): CProgram {
-  return { kind: "cprogram", locals, body }
+export function CProgram(env: Map<string, Type>, locals: Map<string, Value>, body: Map<string, Stmt>): CProgram {
+  return { kind: "cprogram", locals, env, body }
 }
 
 /** for ASM */

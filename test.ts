@@ -1,11 +1,11 @@
-import * as l from "./language.js"
-import { createProgram } from "./fuzz.js"
-import { uncoverGet, uniquifyProgram, parseProgram, removeComplexOperands, reparsePrimitives, typeCheckProgram, exposeAllocation } from "./language.js"
-import * as c from "./c.js"
-import { explicateControl, selectInstructions } from "./c.js"
-import * as x from "./x86.js"
-import { uncoverLive, buildInterference, emitPreludeConclusion, patchInstructions, allocateRegisters } from "./x86.js"
-import { Program } from "./factory.js"
+import * as l from "./language.ts"
+import { createProgram } from "./fuzz.ts"
+import { uncoverGet, uniquifyProgram, parseProgram, removeComplexOperands, reparsePrimitives, typeCheckProgram, exposeAllocation } from "./language.ts"
+import * as c from "./c.ts"
+import { explicateControl, selectInstructions } from "./c.ts"
+import * as x from "./x86.ts"
+import { uncoverLive, buildInterference, emitPreludeConclusion, patchInstructions, allocateRegisters } from "./x86.ts"
+import { Program } from "./factory.ts"
 function test(name: string, actual: number, expected: number) {
   if (actual !== expected) {
     console.log(`Test '${name}' failed: expected ${expected}, actual ${actual}`)
@@ -28,7 +28,7 @@ function runAssignHomes(program: Program, stage: Stage, verbose = false) {
   }
   let xp = selectInstructions(p)
   uncoverLive(xp)
-  buildInterference(xp)
+  buildInterference(xp, p.env)
   allocateRegisters(xp)
   patchInstructions(xp)
   emitPreludeConclusion(xp)

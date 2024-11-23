@@ -1,6 +1,8 @@
-import { assertDefined, read } from "./core.js"
-import { Graph, DirectedGraph } from "./structures.js"
-import { Var, Ref, Imm, Reg, Deref, X86Program, Instr, Block, Jmp, Ret, Cc, ByteReg, equalRef } from "./factory.js"
+import type { Type } from "./core.ts"
+import { assertDefined, read } from "./core.ts"
+import { Graph, DirectedGraph } from "./structures.ts"
+import type { Ref, X86Program, Cc } from "./factory.ts"
+import { equalRef, Block, Instr, Imm, Reg, Deref, Jmp, Ret } from "./factory.ts"
 import assert from "node:assert"
 function frameStackSize(homes: Map<string, Reg | Deref>): number {
   let stackLocations: Set<number> = new Set()
@@ -103,14 +105,14 @@ function patchInstructionsInstr(i: Instr): Instr[] {
 // This seems like the right place to identify and delete them.
 export function uncoverLive(p: X86Program): void {
   const cfg = buildControlFlow(p.blocks)
-  for (const dead of cfg.findDead('start')) {
+  for (const dead of cfg.findDead("start")) {
     p.blocks.delete(dead)
   }
   // not sure whether cfg.sort() is needed before, or after, cfg.transpose()
   cfg.g = cfg.transpose()
   const transfer = (name: string, mapping: Map<string, Set<string>>): Set<string> => {
-    if (name === 'conclusion') {
-      return new Set(['rax', 'rsp'])
+    if (name === "conclusion") {
+      return new Set(["rax", "rsp"])
     }
     const b = assertDefined(p.blocks.get(name))
     const { after, references } = liveBlock(name, b.instructions, mapping)
@@ -122,7 +124,7 @@ export function uncoverLive(p: X86Program): void {
 function analyseControlFlow(
   g: DirectedGraph<string>,
   transfer: (name: string, mapping: Map<string, Set<string>>) => Set<string>,
-  bottom: Set<string>,
+  bottom: Set<string>
 ) {
   const mapping: Map<string, Set<string>> = new Map()
   for (const v of g.vertices()) {
@@ -163,7 +165,11 @@ function buildControlFlow(blocks: Map<string, Block>): DirectedGraph<string> {
   }
   return flow
 }
-function liveBlock(name: string, instructions: Instr[], labelToLive: Map<string, Set<string>>): { after: Set<string>, references: Set<string>[] } {
+function liveBlock(
+  name: string,
+  instructions: Instr[],
+  labelToLive: Map<string, Set<string>>
+): { after: Set<string>; references: Set<string>[] } {
   let after: Set<string> = new Set()
   let prev: { kind: "jmp"; label: string } | undefined = undefined
   const references = [after]
@@ -244,15 +250,39 @@ function liveWriteInstr(i: Instr): string[] {
       return []
   }
 }
-export function buildInterference(p: X86Program): void {
+export function buildInterference(p: X86Program, env: Map<string, Type>): void {
   for (const [_, block] of p.blocks) {
-    interferenceBlock(block, p.info.conflicts)
+    interferenceBlock(block, env, p.info.conflicts)
   }
 }
-function interferenceBlock(block: Block, conflicts: Graph<string>): void {
+function hasTupleType(name: string, env: Map<string, Type>): boolean | undefined {
+  const t = env.get(name)
+  return typeof t === "object" && t.kind === "vector"
+}
+function interferenceBlock(block: Block, env: Map<string, Type>, conflicts: Graph<string>): void {
   for (let i = 0; i < block.instructions.length; i++) {
     const instr = block.instructions[i]
     const live = block.info.references[i + 1]
+    // if a var has type tuple, add an edge between it and all callee-saved registers
+    // TODO: Might need to be only for targets and not sources
+    if (instr.kind === "instr") {
+      if (instr.op === "set") {
+        const ref = instr.args[1]
+        if (ref.kind === "var" && hasTupleType(ref.name, env)) {
+          for (const reg in callee) {
+            conflicts.addEdge(ref.name, reg)
+          }
+        }
+      } else {
+        for (const ref of instr.args) {
+          if (ref.kind === "var" && hasTupleType(ref.name, env)) {
+            for (const reg in callee) {
+              conflicts.addEdge(ref.name, reg)
+            }
+          }
+        }
+      }
+    }
     if (instr.kind === "instr" && (instr.op === "movq" || instr.op === "movzbq")) {
       for (const v of live) {
         const source = nameOfRef(instr.args[0])

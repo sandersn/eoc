@@ -1,7 +1,7 @@
-import { assertDefined, zip, unzip, Box, box, setBox, unbox, Value } from "./core.js"
+import type { Box, Value } from './core.ts'
+import { assertDefined, zip, unzip, box, setBox, unbox, } from "./core.ts"
+import type { Exp, Atom } from './factory.ts'
 import {
-  Exp,
-  Atom,
   Prim,
   PrimAtom,
   Var,
@@ -19,12 +19,13 @@ import {
   Collect,
   GlobalValue,
   Allocate,
-} from "./factory.js"
-import parse from "./parser.js"
-import { AList, alist, assoc } from "./structures.js"
-import { Type, intType, boolType, voidType, read, gensym } from "./core.js"
+} from "./factory.ts"
+import parse from "./parser.ts"
+import type { AList } from './structures.ts'
+import { alist, assoc } from "./structures.ts"
+import type { Type } from "./core.ts"
+import { intType, boolType, voidType, read, gensym } from "./core.ts"
 import assert from "node:assert"
-import { X509Certificate } from "node:crypto"
 /* ### Interpreter ### */
 export function interpExp(e: Exp, env: AList<string, Box> | undefined): Value {
   switch (e.kind) {
@@ -158,9 +159,10 @@ function assertTypeEqual(got: Type, expected: Type, e: Exp): void {
 export function typeCheckProgram(p: Program): Program {
   const [body, t] = typeCheckExp(p.body, undefined)
   assertTypeEqual(t, intType, p.body)
+  alist
   return Program(body)
 }
-function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type] {
+export function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type] {
   switch (e.kind) {
     case "int":
       return [e, intType]
@@ -246,11 +248,16 @@ function typeCheckExp(e: Exp, env: AList<string, Type> | undefined): [Exp, Type]
       assertTypeEqual(t3, t2, e)
       return [If(cond, then, else_), t2]
     }
-    case "as":
+    case "as": {
+      const [exp, t] = typeCheckExp(e.exp, env)
+      return [As(exp, t), t]
+    }
     case "collect":
+      return [e, voidType]
     case "allocate":
+      return [e, e.type]
     case "global-value":
-      throw new Error("Unexpected as/collect/allocate/global-value in type checking.")
+      return [e, intType]
   }
 }
 function typeCheckOp(op: string, args: Type[], e: Prim): Type {
